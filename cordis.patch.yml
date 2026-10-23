@@ -1,0 +1,14 @@
+# dsh-delete-guard bundle patch.
+#
+# Mounts the recycle-bin guard into the DSH profile. The plugin has a host half
+# only: it hooks `tools/pre-execute` and registers two tools. No core file is
+# touched and no existing plugin source is modified.
+- insert:
+    - id: delete-guard
+      name: 'dsh-delete-guard'
+      config:
+        enabled: true
+        blockDestructiveCommands: true
+        forbidEmptyRecycleBin: true
+        forbidWipe: true
+        blockScriptDeletes: true

@@ -1,0 +1,63 @@
+{
+  "name": "dsh-delete-guard",
+  "version": "2.2.3",
+  "description": "Force every DSH file deletion through the OS Recycle Bin. Intercepts shell tool calls at tools/pre-execute (pwsh, bash, cmd, the persistent terminal), rewrites destructive delete commands into a recoverable recycle-bin move (Win32 SHFileOperation / SHQueryRecycleBin), and blocks permanent-erase escapes.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./guard": "./lib/guard.js",
+    "./recycle": "./lib/recycle.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "deepestevan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepestevan/dsh-delete-guard.git"
+  },
+  "homepage": "https://github.com/deepestevan/dsh-delete-guard#readme",
+  "bugs": {
+    "url": "https://github.com/deepestevan/dsh-delete-guard/issues"
+  },
+  "dsh": {
+    "runtime": "host",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "README.ja.md",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "recycle-bin",
+    "trash",
+    "safe-delete",
+    "undelete",
+    "guardrails",
+    "hooks",
+    "windows"
+  ]
+}

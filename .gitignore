@@ -1,0 +1,13 @@
+# Node artifact
+node_modules/
+pnpm-lock.yaml
+npm-debug.log*
+yarn-error.log*
+
+# Packed tarballs (they live in temp/pack outside this tree; this is a guard)
+*.tgz
+
+# Local scratch
+temp/
+scratch/
+*.local.md

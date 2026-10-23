@@ -1,0 +1,52 @@
+# Publish to npm from CI, without a long-lived token.
+#
+# Trusted publishing (npm ≥ 11.5.1, Node ≥ 22.14) exchanges a GitHub OIDC token
+# for publish rights and attaches a provenance statement; no NPM_TOKEN secret is
+# involved. Two things have to be true before this workflow can run:
+#
+#   1. `id-token: write` below (already set), and `npm install -g npm@latest`
+#      before publishing — Node 22 ships npm 10, which predates OIDC publishing.
+#   2. A trusted publisher attached to the package on npmjs.com
+#      (package → Settings → Trusted publishing) or from a logged-in shell:
+#        npm trust github dsh-delete-guard \
+#          --repository deepestevan/dsh-delete-guard \
+#          --workflow publish.yml
+#
+# The first publish of a brand-new package name cannot use OIDC: npm requires the
+# package to exist before a trusted publisher can be attached. So the very first
+# `npm publish` runs by hand (see docs/RELEASING.md), and every release after that
+# goes through this file.
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for trusted publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Node 22 ships npm 10; trusted publishing needs ≥ 11.5.1.
+      - name: npm ≥ 11.5.1
+        run: npm install -g npm@latest && npm --version
+
+      # The package has no runtime dependencies, so there is nothing to install.
+      # `test/` is not shipped, but the pure layers still run here: two of the five
+      # layers need a DSH install and report as skipped, which is expected.
+      - name: tests (pure layers)
+        run: node test/run-all.mjs
+
+      - name: publish
+        run: npm publish
