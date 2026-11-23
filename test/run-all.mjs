@@ -17,27 +17,33 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+// The plugin is Windows-only (`os: ["win32"]`): the bridge is SHFileOperationW, and
+// layers ③ ④ ⑦ assert Windows path and volume semantics (`C:\` is a drive root,
+// `\\host\share` is a UNC path, `path.resolve` is win32). On a POSIX runner those
+// assertions fail for the right reason — the code is not wrong, the host is.
+//
+// Measured on the first CI run this repository ever had (run 45257920725, Ubuntu,
+// Node 22): layer ④ went 4 pass / 11 fail, every failure a POSIX `path.resolve`.
+// The previous 2.3.0 changelog claimed those layers "pass anywhere", based on
+// forcing `process.platform='linux'` locally — which does not change how
+// `node:path` was bound at load time, so the check proved nothing.
+const WINDOWS_ONLY = process.platform === 'win32';
+
 const suites = [
   ['① 命令分类', 'guard.test.mjs'],
   ['② 覆盖守卫', 'rewrite.test.mjs'],
-  // The staging layer creates junctions and copies trees; on a non-Windows runner
-  // the junction half cannot be built, so it stays on win32 like the e2e layer.
-  ['③ 暂存删除', 'staging.test.mjs', 'win32'],
-  ['④ 操作数守卫', 'move-guard.test.mjs'],
+  ['③ 暂存删除', 'staging.test.mjs', WINDOWS_ONLY],
+  ['④ 操作数守卫', 'move-guard.test.mjs', WINDOWS_ONLY],
   ['⑤ 宿主注册', 'registration.test.mjs'],
   ['⑥ 宿主 schema', 'host-schema.test.mjs'],
-  // The e2e layer moves real files into the Windows Recycle Bin, so it cannot run
-  // off Windows — including on the Linux CI runner that publishes the package.
-  // Layers ① ② ④ ⑥ pass anywhere; ⑤ runs its hook cases and skips its two schema
-  // cases when no DSH install is present.
-  ['⑦ 端到端', 'e2e.test.mjs', 'win32'],
+  ['⑦ 端到端', 'e2e.test.mjs', WINDOWS_ONLY],
 ];
 
 let failed = 0;
 let skipped = 0;
-for (const [label, file, platform] of suites) {
-  if (platform !== undefined && process.platform !== platform) {
-    console.log(`\n${'='.repeat(60)}\n[${label}] ${file}\n  skipped: needs ${platform}, running on ${process.platform}`);
+for (const [label, file, runnable = true] of suites) {
+  if (!runnable) {
+    console.log(`\n${'='.repeat(60)}\n[${label}] ${file}\n  skipped: needs win32, running on ${process.platform}`);
     skipped += 1;
     continue;
   }
@@ -50,4 +56,4 @@ if (failed > 0) {
   console.error(`\n${failed} test file(s) failed`);
   process.exit(1);
 }
-console.log(`\nall tests passed${skipped > 0 ? ` (${skipped} suite skipped: wrong platform)` : ''}`);
+console.log(`\nall tests passed${skipped > 0 ? ` (${skipped} suite skipped: not this platform)` : ''}`);

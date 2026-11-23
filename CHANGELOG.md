@@ -7,6 +7,31 @@ each profile actually ran.
 The long-form reasoning behind every entry — what was measured, what was
 rejected, what the trade-off costs — lives in the maintainer's engineering notes (`INCIDENTS.md`, not shipped since 2.2.0).
 
+## [2.4.1] — 2026-11-24
+
+The publish workflow's first run, and what it found. No production code changed.
+
+Releasing 2.4.0 ran `test/run-all.mjs` on Ubuntu for the first time in this
+repository's history — no tags, no releases, no prior workflow runs; 2.2.3 reached
+npm through a hand-run `npm publish`. Layer ④ came back **4 pass / 11 fail**:
+`move-guard.test.mjs` asserts Windows path semantics (`C:\` is a drive root,
+`..\..` resolves inside a volume, `\\host\share` is a UNC share, `C:\Program Files`
+is refused), and on a POSIX runner `node:path` is posix, so `C:\` is an ordinary
+relative name and `resolve()` prepends the checkout path.
+
+Fix: layers ③ ④ ⑦ are gated on `process.platform === 'win32'` in
+`test/run-all.mjs` and report **skipped** elsewhere, with the measurement recorded
+in the comment. The plugin is `os: ["win32"]` and the bridge is
+`SHFileOperationW`: a POSIX runner cannot exercise those paths at all, so gating is
+the honest answer rather than a workaround.
+
+This also corrects a claim in 2.3.0 — "layers ① ② ④ ⑥ pass anywhere" was derived
+from forcing `process.platform='linux'` on Windows, which leaves `node:path` bound
+to win32 at load time, so the check proved nothing about the other platform. CI was
+the only evidence, and it had never run. Same failure mode as the rules this
+release series added: a check that looks green because it never exercised the thing
+it names.
+
 ## [2.4.0] — 2026-11-15
 
 **Deleting from a network share now works instead of being refused.** A share has
