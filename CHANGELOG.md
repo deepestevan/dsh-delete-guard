@@ -7,6 +7,183 @@ each profile actually ran.
 The long-form reasoning behind every entry — what was measured, what was
 rejected, what the trade-off costs — lives in the maintainer's engineering notes (`INCIDENTS.md`, not shipped since 2.2.0).
 
+## [2.4.0] — 2026-11-15
+
+**Deleting from a network share now works instead of being refused.** A share has
+no Recycle Bin: `SHFileOperationW(FOF_ALLOWUNDO)` erases there and returns 0
+(reproduced 2026-10-23), so 2.3.0 refused every UNC path — safe, but the deletion
+never happened and the model had to invent a workaround.
+
+`file_trash` now does what a person does by hand, in one call, in this order:
+
+1. copy the item to a staging directory on a volume that does have a bin
+   (`%LOCALAPPDATA%\dsh-delete-guard\staging\<yyyyMMdd-HHmmss>-<name>`, override
+   with `stagingRoot`);
+2. verify the copy against the original — same relative paths, same kinds, same
+   file sizes;
+3. recycle the staging folder — the copy is now in the bin and restorable;
+4. only then remove the original.
+
+**What this guarantees, stated exactly**: the *content* is recoverable from the
+local Recycle Bin; the *original path* is not, because the share has no bin to hold
+it. Step 4 is an ordinary permanent delete. That is why the order is the safety
+property — every failure before step 4 leaves the original untouched, and step 4
+runs only after the bridge confirms the staged copy left for the bin. A failure in
+step 4 is reported with the paths that remain, never as success.
+
+Restoring lands in the staging path, not back on the share: the bin's `$I` record
+holds the staging location, so `file_trash` prints it in its result and the render
+says so. That is the one place where "delete a share file" is not the same as
+"delete a local file", and it is visible rather than implied.
+
+**Refused, with the reason** (each one stops before any copy):
+- a share root (`\\host\share`) or a bare host — those are not items, and staging
+  them would copy and then delete everything on the share;
+- a tree containing a **reparse point** (junction/symlink): a copy either
+  duplicates the target's contents or needs privileges to recreate the link, so it
+  is not a faithful copy;
+- **insufficient free space** on the staging volume, checked from the measured size
+  before copying, so a 50 GB tree fails in a second instead of halfway.
+
+**Verified vs not**: entry sets, kinds and sizes are compared; content hashes are
+not (both sides of a 50 GB tree). The result reports `verification` so nobody reads
+more into "verified" than it means.
+
+New config: `uncRecoverableMove` (default `true`; `false` restores the plain 2.3.0
+refusal and deletes nothing), `stagingRoot`. New required output field `staged[]`
+(`path`, `staged`, `recycled`, `sourceRemoved`, optional `verification` and
+`remaining`) — a share deletion is *not* reported in `recycled`, because the
+original path never goes to a bin.
+
+Also found while reading the resolution path: `file_trash` with `\\host` (no share)
+used to resolve to `<cwd drive>:\host` — a *local* file that has nothing to do with
+the share the caller meant — and would happily recycle it. The shape is now refused.
+
+Cost, stated: a share delete copies the whole item, so it is O(size) in time and
+needs that much free space on the staging volume; a very large tree may exceed the
+tool call's timeout. Windows' own cross-volume `Move-Item` has the same cost, but no
+verification and no bin record.
+
+Tests: 116 → 128. New layer ③ `test/staging.test.mjs` (8 cases: step order, a
+truncated copy that never reaches the bin, a failed recycle that keeps the
+original, a junction that stops the delete, share-root/host refusal) plus three
+`file_trash`-level cases in `e2e.test.mjs`, one of which deletes a real
+`\\localhost\C$\…` path end to end (reported **skipped** where the admin share is
+unreachable, rather than passing vacuously).
+
+**A documentation incident, recorded because it is the same failure mode as 2.3.0's.**
+Applying these README changes with a scripted `String.replace(needle, text)` put one
+replacement string containing `` $` `` (the `\\localhost\C$` code span, closed by a
+backtick). JavaScript reads `` $` `` in a string replacement as "everything before
+the match" and expanded it, so each README ended up containing itself twice — 6.5 KB
+became 13 KB, silently, and it survived a heading-level spot check because both
+copies were plausible. Caught by counting H1s (2 instead of 1) and by noticing a
+`README.md` whose first copy had no 文档/许可 sections. Rebuilt from `HEAD` with a
+function-based replacer (never `String.replace(_, string)` when the replacement
+contains `$`), every anchor asserted to match exactly once, and the result checked
+structurally: 11 sections and 44 table rows in each of the three files. The lesson is
+2.3.0's lesson one layer up: a rule that silently matches more than intended looks
+exactly like a rule that worked.
+
+## [2.3.0] — 2026-11-15
+
+Content destroyed **without a delete verb** is now covered. Found by measurement,
+not by review: a 605-line ledger was rewritten to 24 lines by
+
+```powershell
+$lines=Get-Content $f
+$idx=($lines | Select-String -Pattern '^# 备用｜同步电机' | Select-Object -First 1).LineNumber
+$keep=$lines[0..($idx-2)]
+Set-Content -LiteralPath $f -Value ($keep + $new) -Encoding UTF8
+```
+
+There is no delete verb in that command, so every 2.2.3 rule was correctly silent.
+`$idx` was `$null` (the anchor matched nothing) and PowerShell reads
+`$lines[0..($null-2)]` as `$lines[0..-2]` — `$lines[0,-1,-2]`, the first line plus
+the last two. Measured on pwsh 7 with a 10-element array: `L1,L10,L9`. No error,
+no warning. Record and verbatim evidence:
+`docs/incidents/2026-11-14-full-file-rewrite-truncation.md`.
+
+New module `lib/rewrite-guard.js` (pure, no I/O), wired into `classifyCommand`
+after the erase/script rules and **before** the redirect collection — `file_trash`
+is the remedy for a delete, and it is the wrong remedy here (see below). New
+config key `blockTruncatingWrites` (default `true`).
+
+**Rule 1 — `in-place-rewrite`.** The same file is read *and* written by one
+command (`Get-Content f … | Set-Content f`, `$c = Get-Content f; Set-Content f $c`,
+`sed -i f`, `cat f > f`, `[IO.File]::ReadAllText` → `::WriteAllText`). Reused or
+rewritten: the operand-key comparison resolves `$f` against a `$f='literal'`
+assignment in the same command, so a literal on one side and a variable on the
+other still match. Allowed when the command itself keeps a copy (`.bak`/`.orig`
+destination, or a temp file it copies over the original) — which is exactly the
+safe pattern the incident record's §6 recommends, so that spelling passes
+untouched.
+
+**Rule 2 — `slice-risk`.** A range/slice endpoint of the form `<var> ± n` whose
+variable is never asserted, in a command that also writes a file. Endpoints proven
+non-null (`.Count`, `Measure-Object`, a literal) and asserted variables
+(`if (-not $idx)`, `$idx -eq $null`, …) do not fire. A read-only command with the
+same bad slice stays allowed: it prints the wrong lines and destroys nothing, and
+refusing it would cost a round trip and protect nothing.
+
+**Rejected: "overwrite an existing file = delete it" (proposed as R1).** Three
+reasons, in order of weight. (a) The remedy does not exist where the failure
+happened: the target was on a UNC share, and `scripts/recycle-bin.ps1` refuses
+those because `SHFileOperationW` erases there and reports success — "recycle the
+old copy, then write" is a no-op on the case that motivated it. (b) The rule is a
+verb list one vocabulary later, i.e. the same structural blind spot: `Export-Csv`,
+`[IO.File]::WriteAllText`, `Invoke-WebRequest -OutFile`, `tee`, `dd of=`, `cp`,
+`truncate`, `sed -i`, a compiler over its own output — any enumeration is
+incomplete and reads as complete. (c) Its consequence, "every overwrite is a
+delete", is the opposite of this plugin's own policy: `write` and `edit` overwrite
+files, and the prompt says to prefer them.
+
+**Rejected: post-write size fuse, refuse-and-roll-back (R2).** Roll-back requires
+the old bytes, so the copy has to be taken *before* the write — which needs the
+target set (the same enumeration problem) — and `tools/post-execute` cannot undo
+anything: `PostToolDecision.block` only turns the result into feedback for the
+next request, after the truncation already happened. Snapshotting a tree per shell
+call is O(workspace) and would still have missed this incident's file, which sat
+on a UNC share outside every workspace root.
+
+**Not `ask`.** In an auto-approving deployment (this machine: approval policy
+`never`) `ask` resolves to allow in the same tick — a rule that looks present and
+does nothing. Deny-with-a-recipe is honest whether or not a human is watching.
+
+**Also fixed, found while doing the above.** Maintaining this repository was
+refused by the published 2.2.3: the rule that looks for a wipe-program name inside
+an inline body matched the name **anywhere** in the body, so a `node -e` script
+whose *prose* quoted `shred` was denied as if it were about to erase the disk
+(measured 2026-11-15 — the guard blocked the `node -e` edit of this very README).
+A shell body (`bash -c "…"`) is shell text, so the name anywhere in it may run; a
+JavaScript or Python body is not, and the name only becomes a command when it
+reaches `exec`/`execSync`/`spawn`/`system`/`subprocess.*`. Split at
+`wipeProgramInInlineBody`: shell interpreters keep the whole-name rule, other
+interpreters require a process-spawning call after the name. Spawned wipes are
+still refused (`execSync('shred -u x')`, `os.system('sdelete …')`).
+
+Costs, stated: the in-place rule is deliberately over-inclusive for "read a file,
+then regenerate it from something else in the same command" (the fix is one
+`Copy-Item` line, and the message says so); `Add-Content`, `>>`, `-Append`,
+`2> $null`, `> /dev/null` and `Clear-Content`-only commands are untouched; `>` onto
+an existing file *without* reading it is still allowed and is listed in the
+README's 「不挡什么」.
+
+Tests: 90 → 116. New layer ② `test/rewrite.test.mjs` (22 cases: the incident
+verbatim, the assertion fix, the §6 safe pattern, every in-place spelling, the
+null-device/appendix exceptions, dialect spellings, the precedence case) plus three
+hook-level cases in `registration.test.mjs` proving `apply()` actually wires the
+rules and that `blockTruncatingWrites: false` disables them, plus the inline-body
+scoping cases in `guard.test.mjs`. The "ordinary work stays allowed" corpus (42
+commands: build, git, publish, log and config plumbing) lives in the same file as
+the incident regression on purpose — a rule that catches the incident and also
+refuses `npm run build` is not a fix.
+
+`lib/shell-text.js` extracted: the lexer (`splitStatements`, `tokenize`,
+`unquote`, `commandWord`) is now shared by both rule modules instead of imported
+across them, which would have been a cycle. `guard.js` re-exports the same four
+names, so nothing downstream changes.
+
 ## [2.2.3] — 2026-10-23
 
 npm publish prerequisites; no behaviour change.

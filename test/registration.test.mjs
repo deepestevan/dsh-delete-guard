@@ -224,3 +224,75 @@ test('a Git Bash delete is redirected with a Windows path', async () => {
   assert.equal(decision.kind, 'deny');
   assert.ok(decision.reason.includes('"C:\\tmp\\build"'), `expected a Windows path, got: ${decision.reason}`);
 });
+
+// --- 2026-11-14: content destroyed without a delete verb --------------------
+//
+// The rules are pure functions in lib/rewrite-guard.js and are unit-tested there.
+// What these cases pin is the part a pure test cannot: that `apply()` actually
+// wires them to the seam the host routes every tool call through, and that the
+// config switch reaches them. A rule that exists in the classifier but never runs
+// is the failure mode this plugin has already been bitten by once (a hook that
+// looked registered and returned next()).
+
+test('the 2026-11-14 truncation command is refused at the hook', async () => {
+  const { ctx, listeners } = makeContext();
+  apply(ctx, {});
+  const handler = listeners[0].handler;
+
+  const command = [
+    '$lines=Get-Content $f',
+    '$idx=($lines | Select-String -Pattern "anchor" | Select-Object -First 1).LineNumber',
+    '$keep=$lines[0..($idx-2)]',
+    'Set-Content -LiteralPath $f -Value $keep -Encoding UTF8',
+  ].join('\n');
+
+  let reachedNext = false;
+  const decision = await handler(
+    { name: 'pwsh', arguments: { command }, signal: new AbortController().signal },
+    async () => {
+      reachedNext = true;
+      return { kind: 'allow' };
+    },
+  );
+
+  assert.equal(reachedNext, false, 'the command must not run');
+  assert.equal(decision.kind, 'deny');
+  assert.equal(decision.info.code, 'DELETE_GUARD_SLICE-RISK');
+  assert.match(decision.reason, /if \(-not \$idx\)/);
+});
+
+test('an in-place rewrite is refused at the hook with the backup recipe', async () => {
+  const { ctx, listeners } = makeContext();
+  apply(ctx, {});
+  const handler = listeners[0].handler;
+
+  const decision = await handler(
+    {
+      name: 'pwsh',
+      arguments: { command: '(Get-Content $f) | Set-Content -LiteralPath $f' },
+      signal: new AbortController().signal,
+    },
+    async () => ({ kind: 'allow' }),
+  );
+
+  assert.equal(decision.kind, 'deny');
+  assert.equal(decision.info.code, 'DELETE_GUARD_IN-PLACE-REWRITE');
+  assert.match(decision.reason, /\.bak-/, 'the fix must name the copy step');
+});
+
+test('blockTruncatingWrites: false lets the same command through', async () => {
+  const { ctx, listeners } = makeContext();
+  apply(ctx, { blockTruncatingWrites: false });
+  const handler = listeners[0].handler;
+
+  const decision = await handler(
+    {
+      name: 'pwsh',
+      arguments: { command: '(Get-Content $f) | Set-Content -LiteralPath $f' },
+      signal: new AbortController().signal,
+    },
+    async () => ({ kind: 'allow' }),
+  );
+
+  assert.equal(decision.kind, 'allow', 'the documented switch must actually disable the rule');
+});

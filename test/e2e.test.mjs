@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir, stat, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, stat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -142,11 +142,32 @@ test('an empty path list is refused rather than silently succeeding', async () =
 
 test('render output tells the user the items are recoverable', async () => {
   const { definition } = await loadTrashTool();
-  const value = { recycled: ['C:/tmp/gone.txt'], failures: [] };
+  const value = { recycled: ['C:/tmp/gone.txt'], staged: [], failures: [] };
   const blocks = definition.output.render({ paths: ['C:/tmp/gone.txt'] }, value);
   const text = blocks.map((b) => b.text).join('\n');
   assert.match(text, /Recycle Bin/);
   assert.match(text, /recoverable/);
+});
+
+test('render names the staging path and the permanent side of a share delete', async () => {
+  const { definition } = await loadTrashTool();
+  const value = {
+    recycled: [],
+    staged: [{
+      path: '\\\\host\\share\\notes.md',
+      staged: 'C:\\staging\\20261115-002512-notes.md',
+      recycled: true,
+      sourceRemoved: true,
+      verification: '1 entries, 12 bytes',
+    }],
+    failures: [],
+  };
+  const text = definition.output.render({}, value).map((b) => b.text).join('\n');
+  // The user has to be able to find the item in the bin afterwards, so the staging
+  // path — the bin entry's original location — must be printed.
+  assert.match(text, /20261115-002512-notes\.md/);
+  assert.match(text, /no Recycle Bin/);
+  assert.match(text, /share has no Recycle Bin/);
 });
 
 test('file_trash recycles a non-ASCII path without corrupting it', async () => {
@@ -225,4 +246,83 @@ test('a local NTFS path still recycles (the refusal must not be a blanket block)
   await assert.rejects(() => stat(victim), /ENOENT/);
 
   await rm(dir, { recursive: true, force: true });
+});
+
+// --- UNC deletions: stage onto an NTFS volume, verify, then recycle ---------
+//
+// A share has no Recycle Bin, so `file_trash` copies the item to a local NTFS
+// volume, verifies the copy, recycles *that*, and only then removes the original.
+// The guarantee is about content (it is in the local bin), not about the path.
+
+/** Turn a local path on the system drive into its `\\localhost\<drive>$` form. */
+function uncForm(localPath) {
+  const drive = localPath[0].toUpperCase();
+  return `\\\\localhost\\${drive}$\\${localPath.slice(3)}`;
+}
+
+test('a UNC delete stages, verifies, recycles the copy and removes the original', async (t) => {
+  const { definition } = await loadTrashTool({ stagingRoot: join(tmpdir(), 'dsh-trash-staging-') });
+
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-trash-unc-'));
+  const victim = join(dir, 'shared-notes.md');
+  await writeFile(victim, 'content that must survive', 'utf8');
+
+  const unc = uncForm(victim);
+  // `\\localhost\C$` must be reachable; on a box with the admin shares off this
+  // test cannot run. Report that as *skipped*, not as passed — a silent early
+  // return is how a test ends up proving nothing.
+  try {
+    await stat(unc);
+  } catch (error) {
+    t.skip(`admin share not reachable (${error.code})`);
+    await rm(dir, { recursive: true, force: true });
+    return;
+  }
+
+  const result = await definition.execute({ paths: [unc] }, fakeExec());
+
+  assert.deepEqual(result.failures, [], `unexpected failures: ${JSON.stringify(result.failures)}`);
+  assert.equal(result.recycled.length, 0, 'a share path must not be reported as directly recycled');
+  assert.equal(result.staged.length, 1);
+
+  const [entry] = result.staged;
+  assert.equal(entry.path, unc);
+  assert.equal(entry.recycled, true);
+  assert.equal(entry.sourceRemoved, true);
+  assert.match(entry.verification, /entries, \d+ bytes/);
+
+  // The original is gone from the share...
+  await assert.rejects(() => stat(unc), /ENOENT/);
+  // ...and the staging folder left the staging root for the bin.
+  await assert.rejects(() => stat(entry.staged), /ENOENT/);
+
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('uncRecoverableMove: false keeps the plain refusal', async () => {
+  const { definition } = await loadTrashTool({ uncRecoverableMove: false });
+
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-trash-unc-off-'));
+  const victim = join(dir, 'keep.md');
+  await writeFile(victim, 'x', 'utf8');
+
+  const result = await definition.execute({ paths: [uncForm(victim)] }, fakeExec());
+
+  assert.equal(result.staged.length, 0);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].error, /no Recycle Bin/);
+
+  // The switch must not delete anything, including the original.
+  assert.equal(await readFile(victim, 'utf8'), 'x');
+  await rm(dir, { recursive: true, force: true });
+});
+
+test('a share root is refused rather than staged', async () => {
+  const { definition } = await loadTrashTool();
+
+  const result = await definition.execute({ paths: ['\\\\localhost\\C$'] }, fakeExec());
+
+  assert.equal(result.staged.length, 0);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].error, /share root/);
 });

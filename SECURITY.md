@@ -15,12 +15,31 @@ command line.
 - An agent deleting files the user still needs — the ordinary failure mode. Every
   recognised delete is refused and redirected to `file_trash`
   (`SHFileOperationW(FOF_ALLOWUNDO)`), so the item is recoverable from Explorer.
-- Locations where "delete" would actually mean "erase": UNC shares and
-  exFAT/FAT32 volumes are refused before the shell is called, because
-  `SHFileOperationW` erases there and still reports success.
+- Volumes whose file system has no bin at all (exFAT/FAT32): refused before the
+  shell is called, because `SHFileOperationW` erases there and still reports
+  success.
+- **Deletion on a share, which has no bin.** `file_trash` copies the item to a
+  local NTFS volume, verifies the copy (entry set, kinds, sizes), recycles the
+  staging folder, and only then removes the original. The guarantee is about
+  **content**, not about the original path: after a successful delete the bytes are
+  in the local bin and the item at the share path is gone, because there is no bin
+  on that volume to hold it. The step order is the safety property — any failure
+  before the last step leaves the original untouched, and the last step runs only
+  after the bridge confirms the staged copy is in the bin. A share root, a tree
+  containing a reparse point, and a staging volume without room are all refused
+  before any copy.
 - Irreversible side doors: permanent-erase programs, erases performed through
   .NET APIs, `Invoke-Expression`, deletes delegated to `cmd.exe`, and every
   spelling of emptying the Recycle Bin.
+- **Content destroyed without a delete verb**: a command that reads a file and
+  overwrites that same file (`Get-Content f … | Set-Content f`, `sed -i f`,
+  `cat f > f`), and a command that slices with an unchecked `$null`-able endpoint
+  and then writes the result. Both are refused, and the refusal names the
+  copy-then-verify recipe that makes the write undoable. This is the one class
+  where routing to the bin cannot help: on a UNC share there is no bin
+  (`scripts/recycle-bin.ps1` refuses it), so prevention is the whole remedy.
+  Record:
+  [docs/incidents/2026-11-14-full-file-rewrite-truncation.md](docs/incidents/2026-11-14-full-file-rewrite-truncation.md).
 
 ## Out of scope (by design, and verified as limits)
 
@@ -38,6 +57,24 @@ a security read:
   `zsh`, `shell`, `terminal_send`, `terminal_write`) are not inspected at all.
 - Deletes inside a script file whose body the guard never sees: it refuses the
   write and the inline forms it can see, not the executed body.
+- Overwrites that do not read the file first (`echo x > notes.md`,
+  `Invoke-WebRequest -OutFile`, `git checkout --`). Those are deliberate rewrites,
+  not read-modify-write: the new content does not depend on the old, and refusing
+  them would mean refusing `write`/`edit` too. README 「不挡什么」 lists them.
+- Post-hoc rollback. There is no "compare the size afterwards and restore": the
+  old bytes are needed *before* the write, `tools/post-execute` can only turn a
+  result into feedback, and a per-call tree snapshot is O(workspace) and would
+  still miss a target outside the workspace.
+- A rule that asks. `{ kind: 'ask' }` resolves to allow in the same tick wherever
+  approvals are auto-granted — the default for unattended deployments — so this
+  plugin denies rather than asks. A rule that only looks present is worse than no
+  rule.
+- Staging a share delete is a *copy*, not an image: ACLs, alternate data streams,
+  sparse ranges and ownership are not reproduced (timestamps are), and the
+  verification compares entry sets, kinds and sizes rather than hashes. Content
+  recovery is the goal; a byte-for-byte clone is not what you get. The cost is also
+  honest: O(size) in time and the same in free space on the staging volume, so a
+  very large tree can exceed the tool call's timeout.
 
 ## Reporting
 

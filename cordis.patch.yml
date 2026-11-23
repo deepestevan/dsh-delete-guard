@@ -12,3 +12,5 @@
         forbidEmptyRecycleBin: true
         forbidWipe: true
         blockScriptDeletes: true
+        blockTruncatingWrites: true
+        uncRecoverableMove: true

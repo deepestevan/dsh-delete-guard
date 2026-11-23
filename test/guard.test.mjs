@@ -471,6 +471,30 @@ test('a wipe program is still denied in program position', () => {
   }
 });
 
+test('a wipe name in a non-shell inline body only counts when it reaches a process', () => {
+  // Measured 2026-11-15 on the published 2.2.3: editing this repository's own
+  // README was refused, because the text being written quoted the tool name inside
+  // a `node -e` body. A word in a JavaScript or Python string erases nothing; the
+  // name has to be handed to exec/spawn/system to become a command.
+  for (const cmd of [
+    'node -e "console.log(\'docs mention shred as a tool name\')"',
+    'python -c "print(\'srm\')"',
+    'node -e "const s = \'sdelete\'; console.log(s.length)"',
+  ]) {
+    assertAllow(cmd);
+  }
+  // The same name handed to a process is still a wipe program.
+  for (const cmd of [
+    "node -e \"require('child_process').execSync('shred -u x')\"",
+    "python -c \"import os; os.system('sdelete -p 3 x')\"",
+    "python -c \"import subprocess; subprocess.run(['shred','-u','x'])\"",
+  ]) {
+    const v = classifyCommand(cmd, PWSH);
+    assert.equal(v.action, 'deny', `must be denied: ${cmd}`);
+    assert.equal(v.kind, 'wipe', `kind for: ${cmd}`);
+  }
+});
+
 test('Clear-RecycleBin is matched in command position, not in prose', () => {
   assertAllow('Select-String -Path README.md -Pattern "Clear-RecycleBin"');
   assertAllow('git commit -m "document Clear-RecycleBin"');
