@@ -76,6 +76,62 @@ a security read:
   honest: O(size) in time and the same in free space on the staging volume, so a
   very large tree can exceed the tool call's timeout.
 
+## Why there is no permanent-delete tool
+
+Issue #2 asks for one: a tool that really erases when the user asked for it,
+gated by a `user_request` / `user_quote` field. It is refused, and the reason is
+not that permanent deletion is never legitimate — a user can always do it in
+Explorer, or run a script themselves. The reason is that **the gate would be
+authored by the thing it is meant to guard.**
+
+Three layers, and only the first has a machine judge:
+
+| Layer | Question | Judge |
+| --- | --- | --- |
+| 1 | did these characters come from the user? | the plugin, mechanically — `source.kind === 'user'` plus an `rpcId` on the `user/message` event |
+| 2 | does that sentence mean "this file may be destroyed"? | nobody, automatically |
+| 3 | should it run *now*? | a human — `{ kind: 'ask' }` where approvals are real; on a box with `approval policy: never` that resolves to allow, so the only remaining human gate is a command the person runs |
+
+A verbatim quote can be checked. Intent cannot, because **the same characters
+carry both readings**: "永久删除 a.md", "不要永久删除 a.md", "别永久删除 a.md",
+"能永久删除 a.md 吗", "你上次说的『永久删除 a.md』是指哪一步" all contain the
+affirmative token, and the last three are not instructions at all. A lexical
+filter over negations is an enumeration treadmill, and it fails in the direction
+of *allowing* — the token is present — which for a destructive action is the worst
+direction to fail in. Adding a semantic model to classify the sentence only moves
+the trust question up one level. (Even the provenance check needs care: `user/message`
+also carries `agent-instructions` from `AGENTS.md`, `runtime-context` and spliced
+agent input, so a filter that does not key on `source.kind` would let the agent
+author its own permission slip.)
+
+**Measured, on why the surrounding design cannot compensate.** 126 real guard
+denials across 58 sessions (300 newest session logs on this machine, 2026-11-24),
+classified by what the model did before the next user turn:
+
+| follow-up | share |
+| --- | --- |
+| changed approach (typically by following the recipe the deny message names: copy to `.bak`, use `edit`) | 78% |
+| `file_trash` within 5 tool calls | 14% |
+| re-attempted a shape the guard would block | 4% |
+| diagnosed first (`read`, `grep`, `Test-Path`) | 3% |
+| wrote a delete into a script and ran that path | 0.8% |
+| **stopped without another tool call** | **0%** |
+
+A block does not end a turn; it re-routes. And the re-route follows the
+alternative the deny message names — which is why every refusal here names one.
+There is no acceptable alternative for "make it unrecoverable", so a
+`permanent_delete` tool would be the shortest path to a goal the model had already
+been told to pursue, with a fabricated-or-misapplied quote as its receipt.
+
+**What would be honest**, if this is ever revisited: the gate is a real approval or
+a command the human runs (`scripts/purge-bin-entry.ps1`, keyed off the `$I` record),
+and `user_quote` is an audit field — never the key. Anything else is an audited
+permanent delete with a receipt the agent wrote itself.
+
+Note the asymmetry: "no permanent delete" is a policy, not an invariant — `Add-Type`
+C# still reaches `DeleteFileW`, as the README's 「不挡什么」 table says. The choice
+above keeps the *easy* path safe, which is what a policy layer can actually do.
+
 ## Reporting
 
 Once this repository is public, use a GitHub Security Advisory (or a private
