@@ -132,6 +132,37 @@ Note the asymmetry: "no permanent delete" is a policy, not an invariant — `Add
 C# still reaches `DeleteFileW`, as the README's 「不挡什么」 table says. The choice
 above keeps the *easy* path safe, which is what a policy layer can actually do.
 
+## How the rules were calibrated (2026-11-25)
+
+The rules from 2.3.0 / 2.4.0 each came from one incident. 2.4.2 came from a
+measurement: **62,131 shell commands that actually ran on this machine** (5,746 session
+logs), re-classified with the matcher as it stood. 1,580 would be refused; **432 of those
+were false positives (0.70% of every command ever run here)**. Records:
+`docs/incidents/2026-11-24-rule-false-positive-sweep.md` (evidence) and
+`docs/incidents/2026-11-24-fix-plan-2-4-2.md` (plan, including the direction that was
+rejected and why).
+
+Two things from that exercise are worth keeping in view when changing a rule:
+
+**1. A shape list is the same mistake as a verb list.** The first proposal was to refuse
+only commands containing a discard token (`[a..b]`, `-First`, `Select-Object`). Measurements
+saw four rebuilds that contain none of them and destroy a whole file anyway
+(`| Where-Object { -not … }`, `for { … continue }`, `-replace '(?s)^.*$'`). The rule keeps
+"reads the same file it writes" as its shape and adds **order** and **recoverability** —
+it does not trade one word list for another.
+
+**2. A count is not a shape.** After the change the sweep's `real` count fell 1,148 → 852,
+which reads like 296 dangerous commands were let through. A mechanical check said otherwise:
+across the 5,917 commands now allowed, **none** are "same file, read before write". The drop
+was the sweep's own classifier mislabeling write-then-read-back as a whole-file rewrite. The
+acceptance criteria were rewritten as a shape gate because of this.
+
+**3. A dry run must not become an instruction.** `Remove-Item x -WhatIf` classified as
+`rewrite`, and the rewrite branch tells the model to re-run the call as `file_trash` — so a
+user asking to preview was advised to destroy the file. Dry runs are now rendered as
+previews. The tempting fix (drop `-WhatIf` statements from classification) was measured and
+rejected: the word in a comment or a string then exempts a real write.
+
 ## Reporting
 
 Once this repository is public, use a GitHub Security Advisory (or a private

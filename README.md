@@ -47,7 +47,7 @@ dsh plugin --profile web add dsh-delete-guard
 dsh plugin --profile web add github:deepestevan/dsh-delete-guard
 # 或者从本地 tarball（改过源码时用这条）
 pnpm pack --pack-destination ./temp/pack     # 先升 package.json 的 version
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.0.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.2.tgz
 # 重启 dsh web：lib/*.js 只在进程启动时加载
 ```
 
@@ -79,6 +79,8 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.py` |
 | **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i $f`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本，写坏就没得还原。带 `.bak` 备份或临时文件校验步骤的写法放行 |
 | **未断言的切片端点** | 同一命令里既写文件、又用 `$idx ± n` 当区间端点（`$l[0..($idx-2)]`、`-First ($i-1)`），而 `$idx` 从没检查过 `$null`。`$null` 在 PowerShell 里不报错：`0..($null-2)` 就是 `0..-2` = 首行 + 末两行 |
+| **读动词折进写语句里** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`：一行里既读又截断再写回，是事故最紧凑的拼法 |
+| **经变量调用的 shell** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"`：程序名不是字面量，正文无法判定 |
 
 **放行**：只读命令、只提到删除词的操作（`Select-String -Pattern "Remove-Item"`、
 `Get-Content shred.exe`）、从回收站**还原**文件、`Add-Content` / `>>` / `-Append`
@@ -166,8 +168,8 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是**擦除并返�
 node test/run-all.mjs
 ```
 
-128 项、七层：命令分类（50）、覆盖守卫（22）、暂存删除（8）、`file_trash` 操作数守卫（15）、宿主 schema 与钩子接线（14）、
-宿主 schema 受理（5）、对真实回收站的端到端（14，含真 `\\localhost\C$` 路径）。`test/` 不进 tarball，所以打包前必须
+148 项、八层：命令分类（50）、覆盖守卫（30）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（15）、
+宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（14，含真 `\\localhost\C$` 路径）。`test/` 不进 tarball，所以打包前必须
 全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
 覆盖守卫那一层里，"事故命令必须被拒" 与 "42 条日常命令必须照常放行" 用的是同一份文件：
 只拦住事故、却把 `npm run build` 也拒掉的规则不算修好。

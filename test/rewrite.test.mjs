@@ -289,3 +289,96 @@ test('known gaps stay gaps (documented in README, not silently covered)', () => 
   ];
   for (const cmd of gaps) assertAllow(cmd);
 });
+
+// --- 2.4.2: findings from the 2026-11-24 corpus sweep ----------------------
+//
+// Each case below is a *measured* behaviour, with the direction it must move.
+// The sweep (62,131 real commands) is in
+// docs/incidents/2026-11-24-rule-false-positive-sweep.md.
+
+test('order: a read after the write is a read-back, not a source', () => {
+  // 171 of the historical false positives were "write, then read the result to
+  // report or verify it". The value cannot reach a write that already ran.
+  assertAllow('Out-File -FilePath out.txt -InputObject $x; Get-Content out.txt');
+  assertAllow('python x.py 2>&1 | Out-File -Encoding utf8 s/x.txt; Get-Content s/x.txt');
+  assertAllow('Set-Content $f $t; $chk = Get-Content $f; if($chk.Length -lt 100){throw "short"}');
+  // …but the incident itself is read-before-write and stays refused.
+  assertDeny('$c=Get-Content $f; Set-Content $f $c', 'in-place-rewrite');
+  assertDeny('Get-Content $f | Set-Content $f', 'in-place-rewrite');
+});
+
+test('.NET writes participate in the order check', () => {
+  // Giving .NET writes no statement index made the last-write lookup return -1,
+  // which emptied the read set and let 223 historical commands through.
+  assertDeny("$f='a.md'; $t=[IO.File]::ReadAllText($f); [IO.File]::WriteAllText($f,$t)", 'in-place-rewrite');
+  assertDeny("$f='a.md'; $t=Get-Content $f -Raw; [IO.File]::WriteAllText($f,$t)", 'in-place-rewrite');
+});
+
+test('a read folded into the write statement is still a read', () => {
+  // The most compact spelling of the incident: one line, no separate Get-Content.
+  // Four variants were all allowed until 2.4.2.
+  assertDeny('$f="a.md"; Set-Content $f (Get-Content $f | Select-Object -First 10)', 'in-place-rewrite');
+  assertDeny('$f="a.md"; Set-Content $f ((Get-Content $f)[0..2])', 'in-place-rewrite');
+  assertDeny('$f="a.md"; Set-Content $f (Get-Content $f | Where-Object { $_ -like "*keep*" })', 'in-place-rewrite');
+  assertDeny('Set-Content notes.md (Get-Content notes.md | Select-Object -First 3)', 'in-place-rewrite');
+  assertDeny('Select-String -Path a.md -Pattern "x" | Set-Content a.md', 'in-place-rewrite');
+});
+
+test('repetition makes textual order untrustworthy', () => {
+  // A read after a write may feed the *next* iteration's write, so the order
+  // exemption must not apply inside a loop. `%` is ForEach-Object's alias and is the
+  // commonest spelling — it was missing from the first gate.
+  assertDeny('$fs=@("a","b"); $fs | % { Set-Content $_ $c; $c = Get-Content $_ }', 'in-place-rewrite');
+  assertDeny('do { Set-Content $f $c; $c = Get-Content $f } until ($true)', 'in-place-rewrite');
+  // …but a loop keyword inside a string is not a shell loop.
+  assertAllow('python -c "for i,l in enumerate(open(\'x\')): print(i)"');
+});
+
+test('a backup only counts when it is a real copy of the target, made first', () => {
+  // Allowed: the documented recipe.
+  assertAllow("$f='a.md'; Copy-Item -LiteralPath $f -Destination \"$f.bak-20261125\"; $t=Get-Content $f -Raw; Set-Content $f $t");
+  assertAllow("sed -i.bak 's/a/b/' notes.md", BASH);
+  // Refused: markers that are not copies.
+  assertDeny("$f='a.md'; $t=Get-Content $f -Raw; Set-Content $f $t  # no .bak needed here", 'in-place-rewrite');
+  assertDeny("$f='a.bak'; $t=Get-Content $f -Raw; Set-Content $f $t", 'in-place-rewrite');
+  assertDeny("$note='.bak is for wimps'; $f=Get-Content a.md -Raw; Set-Content a.md $f", 'in-place-rewrite');
+  // Refused: a backup taken after the overwrite preserves the destroyed content.
+  assertDeny("$f='a.md'; $t=Get-Content $f -Raw; Set-Content $f 'new'; Copy-Item $f \"$f.bak\"", 'in-place-rewrite');
+});
+
+test('a temp file holding the NEW content is not a backup', () => {
+  // The deny message asks for a copy of the original; verifying the output does not
+  // make the input recoverable if the transformation was wrong.
+  assertDeny([
+    "$f='a.md'",
+    '$t=[System.IO.File]::ReadAllText($f)',
+    "$new=$t.Replace('old','new')",
+    "$tmp=$f+'.tmp'",
+    '[System.IO.File]::WriteAllText($tmp,$new)',
+    'Copy-Item -LiteralPath $tmp -Destination $f -Force',
+  ].join('; '), 'in-place-rewrite');
+});
+
+test('a bounded substitution with the codec pinned is the edit tool', () => {
+  // Both encodings stated on both sides: the file cannot be re-encoded, and content
+  // outside the matched substring is untouched.
+  assertAllow("$f='a.md'; $t=Get-Content $f -Raw -Encoding utf8; $t=$t.Replace('a','b'); Set-Content $f $t -Encoding utf8");
+  assertAllow("$f='a.mjs'; (Get-Content $f -Raw -Encoding utf8) -replace 'a\\.txt','b.txt' | Set-Content $f -Encoding utf8");
+  // Missing the read-side codec is the mojibake hazard: a GBK file read as UTF-8 and
+  // written back destroys every non-ASCII character even when the needle is ASCII.
+  assertDeny("$f='a.mjs'; (Get-Content $f -Raw) -replace 'a\\.txt','b.txt' | Set-Content $f -Encoding utf8", 'in-place-rewrite');
+  // A document-wide regex is a whole-content replacement, not a substitution.
+  assertDeny("$f='a.md'; $t=Get-Content $f -Raw -Encoding utf8; $t=$t -replace '(?s)^.*$','x'; Set-Content $f $t -Encoding utf8", 'in-place-rewrite');
+  // …and neither is a substitution applied to a slice.
+  assertDeny("$f='a.md'; $t=Get-Content $f -Raw -Encoding utf8; $t=$t.Replace('a','b'); Set-Content $f ($t -split [char]10)[0..2] -Encoding utf8", 'in-place-rewrite');
+});
+
+test('content destroyed with no slice token stays refused', () => {
+  // These are why the rule is not a "discard-token list": none of them contains
+  // `[a..b]`, `-First`, or `Select-Object`, and all of them rebuild the file.
+  assertDeny('$l = Get-Content $f; $l = $l | Where-Object { -not ($_ -like "*例题*") }; Set-Content $f $l', 'in-place-rewrite');
+  assertDeny('$L = Get-Content $f; $out=@(); for($i=0;$i -lt $L.Count;$i++){ if($L[$i] -match "^### P\\d+"){continue}; $out += $L[$i] }; Set-Content $f $out', 'in-place-rewrite');
+  assertDeny('$l = Get-Content $f; $l = $l | Where-Object { $_ -match "^## " }; Set-Content $f $l', 'in-place-rewrite');
+  assertDeny('$t = Get-Content $f -Raw; $t = $t -replace "(?s)^.*$","x"; Set-Content $f $t', 'in-place-rewrite');
+});
+

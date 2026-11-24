@@ -2,11 +2,12 @@
 //
 //   ① 命令分类    guard.test.mjs        —— 纯函数：什么算删除、什么不算
 //   ② 覆盖守卫    rewrite.test.mjs      —— 纯函数：没有删除动词的内容毁灭（读改写 / 未断言端点）
-//   ③ 暂存删除    staging.test.mjs      —— 纯函数：无回收站的卷（UNC）先复制+校验+回收副本
-//   ④ 操作数守卫  move-guard.test.mjs   —— 纯函数：file_trash 的目标边界
-//   ⑤ 宿主注册    registration.test.mjs —— 桩 ctx 驱动 apply：钩子与两个工具
-//   ⑥ 宿主 schema host-schema.test.mjs  —— 用宿主的 JSON-Schema 校验器卡注册面
-//   ⑦ 端到端      e2e.test.mjs          —— 真移文件、核对回收站占用（含真 UNC 路径）
+//   ③ 规则漏洞    holes.test.mjs        —— 干跑不倒转、回收站动词、provider、间接 shell
+//   ④ 暂存删除    staging.test.mjs      —— 纯函数：无回收站的卷（UNC）先复制+校验+回收副本
+//   ⑤ 操作数守卫  move-guard.test.mjs   —— 纯函数：file_trash 的目标边界
+//   ⑥ 宿主注册    registration.test.mjs —— 桩 ctx 驱动 apply：钩子与两个工具
+//   ⑦ 宿主 schema host-schema.test.mjs  —— 用宿主的 JSON-Schema 校验器卡注册面
+//   ⑧ 端到端      e2e.test.mjs          —— 真移文件、核对回收站占用（含真 UNC 路径）
 //
 // 本插件没有客户端半体（不挂 UI 插槽），故无 client 层测试。
 // 退出码非 0 表示有失败用例。
@@ -18,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 
 // The plugin is Windows-only (`os: ["win32"]`): the bridge is SHFileOperationW, and
-// layers ③ ④ ⑦ assert Windows path and volume semantics (`C:\` is a drive root,
+// layers ④ ⑤ ⑧ assert Windows path and volume semantics (`C:\` is a drive root,
 // `\\host\share` is a UNC path, `path.resolve` is win32). On a POSIX runner those
 // assertions fail for the right reason — the code is not wrong, the host is.
 //
@@ -32,11 +33,12 @@ const WINDOWS_ONLY = process.platform === 'win32';
 const suites = [
   ['① 命令分类', 'guard.test.mjs'],
   ['② 覆盖守卫', 'rewrite.test.mjs'],
-  ['③ 暂存删除', 'staging.test.mjs', WINDOWS_ONLY],
-  ['④ 操作数守卫', 'move-guard.test.mjs', WINDOWS_ONLY],
-  ['⑤ 宿主注册', 'registration.test.mjs'],
-  ['⑥ 宿主 schema', 'host-schema.test.mjs'],
-  ['⑦ 端到端', 'e2e.test.mjs', WINDOWS_ONLY],
+  ['③ 规则漏洞', 'holes.test.mjs'],
+  ['④ 暂存删除', 'staging.test.mjs', WINDOWS_ONLY],
+  ['⑤ 操作数守卫', 'move-guard.test.mjs', WINDOWS_ONLY],
+  ['⑥ 宿主注册', 'registration.test.mjs'],
+  ['⑦ 宿主 schema', 'host-schema.test.mjs'],
+  ['⑧ 端到端', 'e2e.test.mjs', WINDOWS_ONLY],
 ];
 
 let failed = 0;

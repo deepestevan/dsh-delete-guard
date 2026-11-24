@@ -54,7 +54,7 @@ dsh plugin --profile web add dsh-delete-guard
 dsh plugin --profile web add github:deepestevan/dsh-delete-guard
 # or from a local tarball (when you have changed the source)
 pnpm pack --pack-destination ./temp/pack     # bump `version` first
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.0.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.2.tgz
 # restart dsh web: lib/*.js is loaded at process start
 ```
 
@@ -84,6 +84,8 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | Locations without a bin | UNC shares and exFAT/FAT32 volumes, where "recycling" is a permanent erase |
 | Deletes inside scripts | shell / Python / Node inline bodies, and writing delete text into `.ps1`/`.sh`/`.py` |
 | **Reading a file and rewriting it in one command** | `(Get-Content $f) \| Set-Content $f`, `$c = Get-Content $f; Set-Content $f $c`, `sed -i f`, `cat f > f`, `::ReadAllText` → `::WriteAllText` — the new content comes from the only copy, so a wrong slice or filter leaves nothing to restore. The `.bak` / verified-temp spelling is allowed |
+| **A read folded into the write statement** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)` — reads, truncates and writes back on one line, which is the incident with fewer keystrokes |
+| **A shell invoked through a variable** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"` — the program is not a literal, so the body cannot be judged |
 | **An unchecked slice endpoint** | a command that both writes a file and slices with `$idx ± n` (`$l[0..($idx-2)]`, `-First ($i-1)`) where `$idx` was never checked for `$null`. PowerShell does not error: `0..($null-2)` *is* `0..-2` — the first line plus the last two |
 
 **Allowed**: read-only work, commands that only mention a delete word
@@ -181,10 +183,10 @@ the decision is made on the statement's command word, the shape of the call, and
 node test/run-all.mjs
 ```
 
-128 cases across seven layers: command classification (50), overwrite guard (22),
-share staging (8), `file_trash` operand guard (15), host schema + hook wiring (14),
-host schema acceptance (5), live end-to-end against the real Recycle Bin (14,
-including a real `\\localhost\C$` path). `test/` is not shipped in the tarball, so it
+148 cases across eight layers: command classification (50), overwrite guard (30),
+rule holes (12), share staging (8), `file_trash` operand guard (15), host schema +
+hook wiring (14), host schema acceptance (5), live end-to-end against the real
+Recycle Bin (14, including a real `\\localhost\C$` path). `test/` is not shipped in the tarball, so it
 must be green before packing; two layers load the host's own validators and report
 **skipped** (not failed) where no DSH install exists. The overwrite-guard layer keeps
 "the incident command must be refused" and "42 ordinary commands must still pass" in

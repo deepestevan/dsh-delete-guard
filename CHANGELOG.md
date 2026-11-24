@@ -7,6 +7,117 @@ each profile actually ran.
 The long-form reasoning behind every entry — what was measured, what was
 rejected, what the trade-off costs — lives in the maintainer's engineering notes (`INCIDENTS.md`, not shipped since 2.2.0).
 
+## [2.4.2] — 2026-11-25
+
+**Renumbering false positives from real measurements.** The rules from 2.3.0 / 2.4.0 were
+built from one incident each. This release is built from **62,131 shell commands that
+actually ran on this machine** (5,746 session logs), re-classified with today's matcher:
+1,580 would now be refused, and **432 of those were false positives (0.70% of all
+commands)**. Three independent audits — two per-command, one code-level — plus my own
+mechanical re-checks. Evidence: `docs/incidents/2026-11-24-rule-false-positive-sweep.md`,
+plan: `docs/incidents/2026-11-24-fix-plan-2-4-2.md`.
+
+### `in-place-rewrite`: two conditions instead of a new rule
+
+The rule stays "reads the same file it writes". What was missing was **order** and
+**recoverability** — not a different predicate.
+
+- **Order.** A read that happens only *after* the last write is a verification read-back;
+  its value cannot feed a write that already ran. Releases 330 historical commands.
+  - `.NET` writes participate: giving them no statement index made the last-write lookup
+    return `-1`, which emptied the read set and would have let **223** `.NET`
+    read→write commands through — including the shape §9.4 of the incident record
+    claims is covered.
+  - Suppressed inside any repetition construct (`for`, `foreach`, `while`, `do`, `until`,
+    `switch`, `%`/`ForEach-Object`, `.ForEach(`), because there textual order is not
+    execution order. The first gate listed only three keywords and missed `%`, the
+    commonest spelling.
+- **Recoverability.** A copy step now has to be an actual statement writing a *different*
+  path derived from the target, **before** the overwrite. The previous check was a
+  whole-text `BACKUP_MARKER.test(command)`, so all three of these were exempted while
+  truly rewriting a file from its only copy: a `.bak` in a trailing comment, a `.bak` in
+  the target's own name, and a `.bak` in an unrelated string.
+  - `sed -i.bak` still counts — the editor makes the copy itself, in the same statement.
+  - A temp file holding the **new** content is **not** a backup: verifying the output does
+    not make the input recoverable. Refused (this was 4 historical commands).
+
+### A bounded substitution with the codec pinned is the `edit` tool
+
+`$t = $t.Replace('a','b')` written back is a targeted change, not a rebuild. It is now
+allowed when **both** sides state an encoding, which is the condition that actually
+matters: `Get-Content -Raw` on a GBK document decodes it wrong, and `WriteAllText` then
+writes the mojibake back — measured, with an ASCII needle the occurrence check passes and
+every CJK character becomes `U+FFFD`. Encoding continuity is what prevents it; a
+replacement-count check does not.
+
+Not allowed: a document-wide regex (`-replace '(?s)^.*$'` reduces a file to one
+character), a substitution applied to a slice, and a substitution with no codec stated.
+Releases 183 commands (44% of the cluster).
+
+### Four holes the sweep found (not false positives — the opposite)
+
+| Command | Was | Now |
+| --- | --- | --- |
+| `Remove-Item x.txt -WhatIf` | `rewrite/delete` → told the model to re-run it as `file_trash` | rendered as a dry run: "this previewed, nothing was deleted" |
+| `$i.InvokeVerb('delete')` alone | **allowed** (the rule needed a bin reference in the same command) | refused |
+| `$i.Verbs() \| % { $_.DoIt() }` | **allowed** | refused |
+| `const {execSync}=require('child_process'); execSync('…')` | **allowed** (every spawn branch required a leading dot) | refused |
+
+The first is a safety inversion, not friction: the user asked to preview and the guard
+advised destroying the file. The fix renders dry runs differently rather than dropping
+them from classification — dropping statements let the word `-WhatIf` in a comment or a
+string exempt a real write (measured, three cases).
+
+Also: `-WhatIf`/`-Confirm`/`-Verbose`/`-Debug` are switches, not value-taking flags.
+Listing them as value-taking made `Remove-Item -Verbose C:\x\a.txt` report "no explicit
+operands", so the model was told its delete had no target instead of being handed the
+paths.
+
+### Smaller corrections
+
+- `.Verbs()` is enumeration, not driving: the sanctioned restore path and read-only bin
+  listings are allowed again.
+- `DoIt()` is never exempted by a restore word — a comment saying `# restore` laundered it.
+- `Remove-Item variable:x` / `env:X` / `function:x` / `alias:X` are allowed: they delete
+  no file, and the old behaviour handed the model `file_trash "variable:x"`, an
+  instruction that cannot work. `HKCU:`/`Cert:`/`WSMan:` are refused **without** a
+  file_trash hint — the bin cannot hold a registry key.
+- `Invoke-Expression` is judged by its body, not by the word.
+- A shell invoked through a variable (`$shellPath='…bash.exe'; & $shellPath -c "…"`) is
+  refused when the body deletes. Previously the `$sh='bash'` spelling was caught only
+  because the variable *name* contains `sh`.
+- `Select-String <pattern> <file>`: `-Path`'s value was eaten by `skip: 1`, so
+  `Select-String -Path a.md -Pattern x | Set-Content a.md` was allowed.
+- A read folded into the write statement (`Set-Content $f (Get-Content $f | Select-Object -First 10)`)
+  is now a read. Four variants were allowed; this is the incident in one line.
+
+### Costs, stated
+
+- **Latency: +11% best-case, +16% median** on 6,000 real commands (41 interleaved rounds,
+  25 blocks, both versions in one process; the two-version comparison is in
+  `temp/bench-decisive.mjs`). The classifier was ~165 µs/command and is now ~192 µs.
+  For scale: one `stat()` is ~5 µs, one PowerShell spawn (what `file_trash` does) is
+  ~70 ms — the guard is 0.3% of a trash call. A cheap precondition in the hook
+  (two regexes, verified to skip **no** command the classifier would block, on all 6,000)
+  keeps the new checks off the 88% of commands that neither read nor write.
+- **Not reached:** the plan's target was "误伤 < 130". The measured result is **432 → 241**.
+  The remainder is dominated by 156 commands whose *read* side states no encoding — refused
+  on purpose, since that is the mojibake hazard — plus 24 with no encoding on either side
+  and the `UNSURE` group whose writes come from an external script.
+- **`real` count drops 1,148 → 852, which looks like over-relaxation and is not.** Verified
+  mechanically: across the 5,917 commands now allowed, **zero** are "same file, read before
+  write". The drop is the sweep's own classifier mislabeling write-then-read-back
+  (`python x.py | Out-File out.txt; Get-Content out.txt`) as a whole-file rewrite. The
+  acceptance criteria were changed to a shape gate for this reason.
+
+### Tests
+
+116 → **148**, eight layers. New layer ③ `test/holes.test.mjs` (12 cases) pins each hole
+and each correction with the direction it must move; layer ② grew from 22 to 30 cases
+covering order, `.NET` ordering, folded reads, repetition, real-vs-fake backup steps,
+pinned encoding, and the four "no discard token" rebuilds that keep the rule from
+degenerating into a token list.
+
 ## [2.4.1] — 2026-11-24
 
 The publish workflow's first run, and what it found. No production code changed.

@@ -51,7 +51,7 @@ dsh plugin --profile web add dsh-delete-guard
 dsh plugin --profile web add github:deepestevan/dsh-delete-guard
 # またはローカルの tarball から（ソースを変更したとき）
 pnpm pack --pack-destination ./temp/pack     # 先に package.json の version を上げる
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.0.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.2.tgz
 # dsh web を再起動（lib/*.js はプロセス起動時に読み込まれる）
 ```
 
@@ -81,6 +81,8 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | ごみ箱が無い場所 | UNC 共有と exFAT/FAT32 ボリューム（そこで「ごみ箱へ」は完全消去と同じ） |
 | スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.py` への書き込み |
 | **同一ファイルの読み書き** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i f`、`cat f > f`、`::ReadAllText` → `::WriteAllText`——新しい内容は唯一のコピーから作られるため、切り出しやフィルタを誤ると復元元が残りません。`.bak` か検証付き一時ファイルを残す書き方は許可 |
+| **書き込み文に折り込まれた読み取り** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`——1 行で読み・切り詰め・書き戻し。事故の最短表記 |
+| **変数経由のシェル呼び出し** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"`——プログラム名がリテラルでなく、本体を判定できない |
 | **未検査のスライス端点** | 同一コマンド内でファイルを書き、かつ `$idx ± n` を端点に使う（`$l[0..($idx-2)]`、`-First ($i-1)`）。`$idx` は `$null` 検査済みでない。PowerShell はエラーにせず、`0..($null-2)` は `0..-2`（先頭行 + 末尾 2 行）になる |
 
 **許可される**：読み取り専用の作業、削除語に言及するだけのコマンド
@@ -171,7 +173,7 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 node test/run-all.mjs
 ```
 
-7 層・128 ケース：コマンド分類（50）、上書きガード（22）、共有ステージング（8）、
+8 層・148 ケース：コマンド分類（50）、上書きガード（30）、規則の穴（12）、共有ステージング（8）、
 `file_trash` オペランドガード（15）、ホストのスキーマとフック配線（14）、ホストのスキーマ受理（5）、
 実ごみ箱に対するエンドツーエンド（14、実 `\\localhost\C$` パスを含む）。`test/` は tarball に
 含まれないので、パック前に緑である必要があります。うち 2 層はホスト自身の検証器を読み込むため、
