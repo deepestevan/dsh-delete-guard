@@ -84,7 +84,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | Locations without a bin | UNC shares and exFAT/FAT32 volumes, where "recycling" is a permanent erase |
 | Deletes inside scripts | shell / Python / Node inline bodies, and writing delete text into `.ps1`/`.sh`/`.py` |
 | **Reading a file and rewriting it in one command** | `(Get-Content $f) \| Set-Content $f`, `$c = Get-Content $f; Set-Content $f $c`, `sed -i f`, `cat f > f`, `::ReadAllText` → `::WriteAllText` — the new content comes from the only copy, so a wrong slice or filter leaves nothing to restore. The `.bak` / verified-temp spelling is allowed |
-| **A read folded into the write statement** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)` — reads, truncates and writes back on one line, which is the incident with fewer keystrokes |
+| **A read folded into the write statement** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)` — reads, truncates and writes back on one line |
 | **A shell invoked through a variable** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"` — the program is not a literal, so the body cannot be judged |
 | **An unchecked slice endpoint** | a command that both writes a file and slices with `$idx ± n` (`$l[0..($idx-2)]`, `-First ($i-1)`) where `$idx` was never checked for `$null`. PowerShell does not error: `0..($null-2)` *is* `0..-2` — the first line plus the last two |
 
@@ -92,9 +92,8 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 (`Select-String -Pattern "Remove-Item"`, `Get-Content shred.exe`), **restoring**
 files out of the bin, `Add-Content` / `>>` / `-Append` (an append replaces
 nothing), writes to `$null` / `/dev/null`, a full rewrite that first copies the file
-to `.bak` or writes a temp file it verifies (the incident record's §6 spelling
-passes untouched), and a wipe-program **name mentioned** inside a `node -e` / `python -c`
-body — it is a program only when it reaches `exec` / `execSync` / `spawn` / `system` /
+to `.bak` or writes a temp file it verifies, and a wipe-program **name mentioned** inside a
+`node -e` / `python -c` body — it is a program only when it reaches `exec` / `execSync` / `spawn` / `system` /
 `subprocess.*` (a `bash -c` body is shell text and is judged whole).
 
 ## Two tools
@@ -155,7 +154,7 @@ containing a **reparse point** (junction/symlink — a copy either duplicates th
 target's contents or needs privileges to recreate the link); **not enough free
 space** on the staging volume.
 
-`uncRecoverableMove: false` restores the plain refusal and deletes nothing.
+`uncRecoverableMove: false` refuses a share path outright: nothing is copied and nothing is deleted.
 
 ## What it does not cover
 
@@ -168,9 +167,9 @@ space** on the staging volume.
 | A delete split across two terminal sends | Each send is judged on its own text |
 | Non-Windows platforms | The bridge is `SHFileOperationW` |
 | Free-space exhaustion | A same-volume NTFS recycle is a rename and consumes no space, so there is nothing to pre-check |
-| **Overwriting without reading** (`echo x > notes.md`, `Invoke-WebRequest -OutFile`, `git checkout -- f`) | A deliberate rewrite, not read-modify-write: the new content does not depend on the old, and `write`/`edit` do the same thing. Making every write verb a delete is the over-broad rule this plugin rejected |
+| **Overwriting without reading** (`echo x > notes.md`, `Invoke-WebRequest -OutFile`, `git checkout -- f`) | A deliberate rewrite, not read-modify-write: the new content does not depend on the old, and `write`/`edit` do the same thing |
 | **Indirect writes inside a read-modify-write** (compilers, `npm run build`, `robocopy` over build output) | The write happens in a child process; the command text names no provable target |
-| Post-write size fuse / rollback | Rolling back needs the old bytes, which must be copied *before* the write — the same target-enumeration problem. `tools/post-execute` can only turn a result into feedback, and a per-call tree snapshot is O(workspace) and would still miss a UNC target outside the workspace |
+| Judging a truncation by size afterwards | Rolling back needs the old bytes, which must be copied *before* the write; `tools/post-execute` can only turn a result into feedback |
 | Moving something off a share (`Move-Item`, `robocopy /MOV`) | That is a move, not a delete: the content reaches the destination, but the share copy is unlinked for good and no bin record exists. `file_trash` is the path that keeps one |
 
 Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
@@ -188,10 +187,9 @@ rule holes (12), share staging (8), `file_trash` operand guard (15), host schema
 hook wiring (14), host schema acceptance (5), live end-to-end against the real
 Recycle Bin (14, including a real `\\localhost\C$` path). `test/` is not shipped in the tarball, so it
 must be green before packing; two layers load the host's own validators and report
-**skipped** (not failed) where no DSH install exists. The overwrite-guard layer keeps
-"the incident command must be refused" and "42 ordinary commands must still pass" in
-one file on purpose: a rule that catches the incident and also refuses `npm run build`
-is not a fix.
+**skipped** (not failed) where no DSH install exists. The overwrite-guard layer pins both
+directions in one file: the dangerous shapes are refused, and ordinary work (builds, git,
+log and config rewrites) still passes.
 
 ## Documentation
 
@@ -199,14 +197,12 @@ is not a fix.
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | Version summaries |
 | [SECURITY.md](SECURITY.md) | Threat model: a policy layer, not a sandbox |
-| [docs/incidents/](docs/incidents/) | Incident records: the measurement behind each rule, with the verbatim command (not in the npm package — see `files`) |
+| [docs/incidents/](docs/incidents/) | Measured evidence behind each rule, with the verbatim command (not in the npm package) |
 | [LICENSE](LICENSE) | MIT |
 
-Incident records stay in the repository because they *are* the evidence for the
-rules: a rule whose origin ("which command, under what conditions, with what
-result") is unavailable can only be maintained by guessing. Design rationale and
-the release runbook remain the maintainer's notes and ship with neither the
-repository nor the package.
+Incident records stay in the repository because they are the evidence for the rules: a
+rule whose origin — which command, under what conditions, with what result — is
+unavailable can only be maintained by guessing.
 
 ## License
 

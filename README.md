@@ -24,7 +24,6 @@ agent:  $lines=Get-Content $f; $idx=(…Select-String…).LineNumber; Set-Conten
 DSH 里模型执行 `pwsh` 的删除命令，文件是被直接抹掉的：`ctx.fs` 没有 delete，
 `ctx.shell` 只有 `execute()`，没有任何中间层。一句 `Remove-Item -Recurse -Force`
 就能带走一整个目录，没有回收站，没有撤销。
-
 本插件挂在 `tools/pre-execute`（宿主真正路由每个工具调用的接缝），把这些调用**拒绝**，
 并告诉模型改用 `file_trash`；后者用 `SHFileOperationW(FOF_ALLOWUNDO)` 移动文件——和资源
 管理器删文件是同一套 Win32 API，所以 `$Recycle.Bin` 的 `$I`/`$R` 元数据正确，「还原」可用。
@@ -35,8 +34,8 @@ DSH 里模型执行 `pwsh` 的删除命令，文件是被直接抹掉的：`ctx.
 
 还有一类**没有删除动词**的毁灭：把文件读进来、算一刀、再覆盖回同一个文件。
 `$lines[0..($null-2)]` 在 PowerShell 里不是错误，而是 `$lines[0..-2]`，即「首行 + 末两行」
-——605 行可以这样被静默保存成 24 行。这类命令既不能进回收站（网络共享根本没有回收站），
-也不能靠事后比对发现，所以守卫在写入前就按「读改写同一文件」和「未断言的切片端点」拒绝。
+——一个 605 行的文件可以这样被静默写成 24 行。这类命令既不能进回收站（网络共享上没有），
+也不能靠事后比对发现，所以在写入前就按「读改写同一文件」和「未断言的切片端点」拒绝。
 
 ## 安装
 
@@ -77,16 +76,16 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | 清空回收站 | `Clear-RecycleBin`（含 `&`、子壳、`-EncodedCommand` 形态）、`SHEmptyRecycleBin`、对回收站条目驱动 shell 动词、直接删 `$Recycle.Bin` 内容 |
 | 没有回收站的位置 | UNC 共享、exFAT/FAT32 卷（在那里"回收"等于永久擦除） |
 | 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.py` |
-| **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i $f`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本，写坏就没得还原。带 `.bak` 备份或临时文件校验步骤的写法放行 |
+| **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i $f`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本，写坏就没得还原。先备份到 `.bak` 或在写临时文件后校验再换上去的写法放行 |
 | **未断言的切片端点** | 同一命令里既写文件、又用 `$idx ± n` 当区间端点（`$l[0..($idx-2)]`、`-First ($i-1)`），而 `$idx` 从没检查过 `$null`。`$null` 在 PowerShell 里不报错：`0..($null-2)` 就是 `0..-2` = 首行 + 末两行 |
-| **读动词折进写语句里** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`：一行里既读又截断再写回，是事故最紧凑的拼法 |
+| **读动词折进写语句里** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`：一行里既读、又截断、又写回 |
 | **经变量调用的 shell** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"`：程序名不是字面量，正文无法判定 |
 
 **放行**：只读命令、只提到删除词的操作（`Select-String -Pattern "Remove-Item"`、
 `Get-Content shred.exe`）、从回收站**还原**文件、`Add-Content` / `>>` / `-Append`
-（追加不替换）、写 `$null` / `/dev/null`、以及**带 `.bak` 备份或临时文件校验**的整档重写
-（事故记录 §6 的那套写法原样通过）。另外，`node -e` / `python -c` 体里**提到**擦除工具名的文本不算程序名——
-只有把它交给 `exec` / `execSync` / `spawn` / `system` / `subprocess.*` 才算（`bash -c` 体是 shell 文本，仍按整段判）。
+（追加不替换）、写 `$null` / `/dev/null`，以及带备份或校验步骤的整档重写。
+`node -e` / `python -c` 体里**提到**擦除工具名的文本不算程序名——只有把它交给
+`exec` / `execSync` / `spawn` / `system` / `subprocess.*` 才算（`bash -c` 体是 shell 文本，仍按整段判）。
 
 ## 两个工具
 
@@ -141,7 +140,7 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是**擦除并返�
 会被拒绝，且都在复制之前停住：共享根（`\\host\share`）与只有主机名的形态、树里含**重解析点**
 （junction／符号链接：复制要么把目标内容一起复制进来、要么需要权限重建链接）、暂存卷**空间不足**。
 
-`uncRecoverableMove: false` 退回 2.3.0 的纯拒绝，且什么都不删。
+`uncRecoverableMove: false` 时改为直接拒绝共享路径，不复制也不删除。
 
 ## 不挡什么
 
@@ -154,10 +153,10 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是**擦除并返�
 | 终端里分两次发送才拼出的删除 | 每次 send 只看到这一次的文本 |
 | 非 Windows 平台 | 桥接是 `SHFileOperationW` |
 | 空余空间不足时的删除 | NTFS 同卷回收是 rename，不占新空间，没有可预检的东西 |
-| **没读过就覆盖**（`echo x > 既有文件.md`、`Invoke-WebRequest -OutFile $f`、`git checkout -- f`） | 这是「有意重写」，不是读改写：新内容不依赖旧内容，`write`/`edit` 工具也做同一件事。按动词列举覆盖写入会连构建日志、生成配置一起拒绝，正是本插件否掉的做法 |
+| **没读过就覆盖**（`echo x > 既有文件.md`、`Invoke-WebRequest -OutFile $f`、`git checkout -- f`） | 这是「有意重写」，不是读改写：新内容不依赖旧内容，`write`/`edit` 工具也做同一件事 |
 | 读改写里的**间接**写（编译器、`npm run build`、`robocopy` 覆盖产物） | 写入发生在子进程内部，命令文本里没有可判定的目标 |
-| 写完之后再比对体积（截断熔断） | 需要覆盖前的旧内容才能回滚：`tools/post-execute` 只能把结果改成反馈，撤不回已截断的内容；每轮 shell 调用快照整棵树是 O(工作区)，而且本次事故的目标在 UNC 共享上，任何工作区快照都不包含它 |
-| 把共享上的东西 `Move-Item` / `robocopy /MOV` 到本地 | 那是"移动"不是"删除"：内容到了目标位置，但共享上的原件被永久 unlink，没有回收站记录。要留记录就得走 `file_trash` |
+| 写完之后按体积判断有没有被截断 | 回滚需要覆盖前的旧内容，而 `tools/post-execute` 只能把结果改成反馈，撤不回已写入的内容 |
+| 把共享上的东西 `Move-Item` / `robocopy /MOV` 到本地 | 那是「移动」不是「删除」：内容到了目标位置，但共享上的原件被永久删除，没有回收站记录。要留记录就得走 `file_trash` |
 
 覆盖的 shell 工具名：`pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`、`shell`、
 `terminal_send`、`terminal_write`。判定看的是语句的命令词、调用的形态和程序位置，不是「这一行里出现过这个词」。
@@ -169,24 +168,21 @@ node test/run-all.mjs
 ```
 
 148 项、八层：命令分类（50）、覆盖守卫（30）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（15）、
-宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（14，含真 `\\localhost\C$` 路径）。`test/` 不进 tarball，所以打包前必须
-全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
-覆盖守卫那一层里，"事故命令必须被拒" 与 "42 条日常命令必须照常放行" 用的是同一份文件：
-只拦住事故、却把 `npm run build` 也拒掉的规则不算修好。
+宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（14，含真 `\\localhost\C$` 路径）。
+`test/` 不进 tarball，所以打包前必须全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
+覆盖守卫那一层同时钉住两个方向：该拒的命令被拒，日常命令（构建、git、日志、配置改写）照常放行。
 
 ## 文档
 
 | 文件 | 内容 |
 | --- | --- |
-| [CHANGELOG.md](CHANGELOG.md) | 版本摘要 |
+| [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么、为什么 |
 | [SECURITY.md](SECURITY.md) | 威胁模型：策略层，不是沙箱 |
-| [docs/incidents/](docs/incidents/) | 事故记录：每条规则背后的实测与逐字命令（不进 npm 包，见 `files`） |
+| [docs/incidents/](docs/incidents/) | 规则的实测依据与逐字命令（不进 npm 包） |
 | [LICENSE](LICENSE) | MIT |
 
-事故记录留在仓库里，因为它就是规则的证据：一条规则若说不清"当初哪条命令、在什么条件下、
-造成了什么后果"，接手的人就只能靠猜去维护它。设计取舍、逐轮实测与发布跑批仍属维护者侧的
-工程笔记，不随仓库与包发布。（2.2.0 曾把笔记整体移出仓库，起因是里面带私有主机名与 UNC
-路径；记录留在仓库时按同一条标准脱敏。）
+事故记录留在仓库里，因为它是规则的依据：一条规则若说不清当初哪条命令、在什么条件下造成了什么后果，
+接手的人只能靠猜去维护它。
 
 ## 许可
 

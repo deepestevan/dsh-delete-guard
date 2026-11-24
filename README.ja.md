@@ -81,7 +81,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | ごみ箱が無い場所 | UNC 共有と exFAT/FAT32 ボリューム（そこで「ごみ箱へ」は完全消去と同じ） |
 | スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.py` への書き込み |
 | **同一ファイルの読み書き** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i f`、`cat f > f`、`::ReadAllText` → `::WriteAllText`——新しい内容は唯一のコピーから作られるため、切り出しやフィルタを誤ると復元元が残りません。`.bak` か検証付き一時ファイルを残す書き方は許可 |
-| **書き込み文に折り込まれた読み取り** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`——1 行で読み・切り詰め・書き戻し。事故の最短表記 |
+| **書き込み文に折り込まれた読み取り** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`——1 行で読み・切り詰め・書き戻し |
 | **変数経由のシェル呼び出し** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"`——プログラム名がリテラルでなく、本体を判定できない |
 | **未検査のスライス端点** | 同一コマンド内でファイルを書き、かつ `$idx ± n` を端点に使う（`$l[0..($idx-2)]`、`-First ($i-1)`）。`$idx` は `$null` 検査済みでない。PowerShell はエラーにせず、`0..($null-2)` は `0..-2`（先頭行 + 末尾 2 行）になる |
 
@@ -89,7 +89,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 （`Select-String -Pattern "Remove-Item"`、`Get-Content shred.exe`）、ごみ箱から
 の**復元**、`Add-Content` / `>>` / `-Append`（追記は置き換えない）、`$null` / `/dev/null`
 への書き込み、そして**`.bak` か検証付き一時ファイルを先に作る**全面書き換え
-（事故記録 §6 の書き方はそのまま通ります）。また `node -e` / `python -c` の本体で消去ツール名に
+また `node -e` / `python -c` の本体で消去ツール名に
 **言及**しただけのテキストはプログラム名として扱いません——`exec` / `execSync` / `spawn` /
 `system` / `subprocess.*` に渡されたときだけです（`bash -c` の本体はシェルテキストなので
 全体で判定します）。
@@ -146,7 +146,7 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 複製前に拒否するもの：共有ルート（`\\host\share`）やホスト名のみの形、**リパースポイント**
 （ジャンクション／シンボリックリンク）を含むツリー、ステージング先の**空き容量不足**。
 
-`uncRecoverableMove: false` で 2.3.0 の拒否のみに戻り、何も削除しません。
+`uncRecoverableMove: false` にすると共有パスはそのまま拒否され、複製も削除も行いません。
 
 ## 何を守らないか
 
@@ -185,12 +185,11 @@ DSH のインストールが無い環境では失敗ではなく**スキップ**
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | バージョン摘要 |
 | [SECURITY.md](SECURITY.md) | 脅威モデル：サンドボックスではなくポリシー層 |
-| [docs/incidents/](docs/incidents/) | 事故記録：各規則の背景にある実測と逐語コマンド（npm パッケージには含まれません） |
+| [docs/incidents/](docs/incidents/) | 各規則の根拠となる実測と逐語コマンド（npm パッケージには含まれません） |
 | [LICENSE](LICENSE) | MIT |
 
-事故記録はリポジトリに残します。規則の根拠そのものだからです——「どのコマンドが、どんな条件で、
-何を壊したか」が分からない規則は、推測でしか保守できません。設計の根拠とリリース手順は
-メンテナ側のノートに留め、リポジトリにもパッケージにも含めません。
+事故記録はリポジトリに残します。規則の根拠そのものだからです——どのコマンドが、どんな条件で、
+何を壊したかが分からない規則は、推測でしか保守できません。
 
 ## ライセンス
 
