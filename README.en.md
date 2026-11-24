@@ -184,7 +184,9 @@ Recycle Bin (14, including a real `\\localhost\C$` path). `test/` is not shipped
 must be green before packing; two layers load the host's own validators and report
 **skipped** (not failed) where no DSH install exists. The overwrite-guard layer pins both
 directions in one file: the dangerous shapes are refused, and ordinary work (builds, git,
-log and config rewrites) still passes.
+log and config rewrites) still passes. One further layer checks the documentation
+(`scripts/verify-readme-structure.mjs`): the three READMEs must have the same sections and
+the same number of table rows.
 
 ## Documentation
 

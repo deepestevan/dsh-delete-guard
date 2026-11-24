@@ -168,6 +168,7 @@ node test/run-all.mjs
 148 项、八层：命令分类（50）、覆盖守卫（30）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（15）、
 宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（14，含真 `\\localhost\C$` 路径）。
 `test/` 不进 tarball，所以打包前必须全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
+另有一层文档检查（`scripts/verify-readme-structure.mjs`）：三份 README 的章节数与表格行数必须一致。
 
 ## 文档
 

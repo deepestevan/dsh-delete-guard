@@ -39,6 +39,11 @@ const suites = [
   ['⑥ 宿主注册', 'registration.test.mjs'],
   ['⑦ 宿主 schema', 'host-schema.test.mjs'],
   ['⑧ 端到端', 'e2e.test.mjs', WINDOWS_ONLY],
+  // Documentation is part of the artifact a user reads, and the three language
+  // versions are edited by hand. This layer is a plain script, not a `node --test`
+  // file: it checks that the three READMEs still have the same sections and table
+  // size. The leading marker selects how it is invoked.
+  ['⑨ 文档结构', 'script:../scripts/verify-readme-structure.mjs'],
 ];
 
 let failed = 0;
@@ -50,7 +55,10 @@ for (const [label, file, runnable = true] of suites) {
     continue;
   }
   console.log(`\n${'='.repeat(60)}\n[${label}] ${file}`);
-  const r = spawnSync(process.execPath, ['--test', join(here, file)], { stdio: 'inherit' });
+  const isScript = file.startsWith('script:');
+  const target = join(here, isScript ? file.slice('script:'.length) : file);
+  const args = isScript ? [target] : ['--test', target];
+  const r = spawnSync(process.execPath, args, { stdio: 'inherit' });
   if (r.status !== 0) failed += 1;
 }
 
