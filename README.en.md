@@ -167,6 +167,8 @@ space** on the staging volume.
 | **Indirect writes inside a read-modify-write** (compilers, `npm run build`, `robocopy` over build output) | The write happens in a child process; the command text names no provable target |
 | Judging a truncation by size afterwards | Rolling back needs the old bytes, and `tools/post-execute` can only turn a result into feedback |
 | Moving something off a share (`Move-Item`, `robocopy /MOV`) | The content reaches the destination, but the share copy is unlinked for good and no bin record exists |
+| **A directory holding a name Windows cannot open** (trailing space or dot, usually left by WSL, an extractor or a sync client) | Win32 trims the trailing character when the name goes into a path, so the tree cannot be walked. The tool names the entry and the reason, and does **not** rename or delete it for you |
+| **A directory a process is using** (its working directory, or an open file inside) | The files inside can go one by one; the directory waits for the holder to let go. The tool says that is what happened and does **not** hunt for the process — that needs elevation or handle scanning, and a guessed PID is worse than none |
 
 Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
 `terminal_send`, `terminal_write`.
@@ -177,10 +179,11 @@ Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
 node test/run-all.mjs
 ```
 
-148 cases across eight layers: command classification (50), overwrite guard (30),
+155 cases across ten layers: command classification (50), overwrite guard (30),
 rule holes (12), share staging (8), `file_trash` operand guard (15), host schema +
 hook wiring (14), host schema acceptance (5), live end-to-end against the real
-Recycle Bin (14, including a real `\\localhost\C$` path). `test/` is not shipped in the tarball, so it
+Recycle Bin (14, including a real `\\localhost\C$` path), failure diagnosis (7).
+`test/` is not shipped in the tarball, so it
 must be green before packing; two layers load the host's own validators and report
 **skipped** (not failed) where no DSH install exists. The overwrite-guard layer pins both
 directions in one file: the dangerous shapes are refused, and ordinary work (builds, git,

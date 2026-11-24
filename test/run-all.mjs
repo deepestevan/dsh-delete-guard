@@ -39,11 +39,12 @@ const suites = [
   ['⑥ 宿主注册', 'registration.test.mjs'],
   ['⑦ 宿主 schema', 'host-schema.test.mjs'],
   ['⑧ 端到端', 'e2e.test.mjs', WINDOWS_ONLY],
+  ['⑨ 失败诊断', 'diagnosis.test.mjs', WINDOWS_ONLY],
   // Documentation is part of the artifact a user reads, and the three language
   // versions are edited by hand. This layer is a plain script, not a `node --test`
   // file: it checks that the three READMEs still have the same sections and table
   // size. The leading marker selects how it is invoked.
-  ['⑨ 文档结构', 'script:../scripts/verify-readme-structure.mjs'],
+  ['⑩ 文档结构', 'script:../scripts/verify-readme-structure.mjs'],
 ];
 
 let failed = 0;

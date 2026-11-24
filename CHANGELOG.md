@@ -7,6 +7,69 @@ each profile actually ran.
 The long-form reasoning behind every entry — what was measured, what was
 rejected, what the trade-off costs — lives in the maintainer's engineering notes (`INCIDENTS.md`, not shipped since 2.2.0).
 
+## [2.4.3] — 2026-11-26
+
+**A failed delete now says what actually failed.** Reported from use: a directory whose
+files could all be deleted would not delete itself, and the model worked around it by
+renaming things until something took. Reproduced both causes, and both produced a
+message that pointed at the wrong thing.
+
+### `0x2` said "the path no longer exists" while the path was there
+
+A name ending in a space or a dot can exist on NTFS — WSL, an archive extractor, a sync
+client or a port of a POSIX tool creates them — but Win32 trims those trailing
+characters when a name is written into a path. `SHFileOperationW` walks the tree, the
+child's own open fails with `ERROR_FILE_NOT_FOUND`, and the whole call returns `0x2`.
+Measured 2026-11-25: a directory with one such child refuses; the same directory with
+the child's name normalised recycles.
+
+The old message was a lie about the path. It now names the offending entries and says
+why, listing through the `\\?\` prefix — the one spelling in which Win32 takes the name
+literally — capped at eight so a pathological tree cannot flood the reply.
+
+### `0x20` said "access is denied" with no hint of why
+
+A directory held as some process's working directory, or holding an open file, returns
+`DE_ACCESSDENIED`. Every file inside can still be deleted; the directory cannot, until
+the process lets go. That is exactly the reported symptom.
+
+The message now says a process is probably using it, that the contents can still go
+individually, and that this tool **will not guess** which process — enumerating handles
+needs elevation, and a screenshot of a guessed PID list would be worse than no answer.
+Note what is *not* claimed: a share-mode probe of the directory does not detect a cwd
+holder (measured — it opens cleanly), so there is no cheap reliable detector, which is
+why this is a message rather than a verdict.
+
+### The `\\?\` prefix was refused as a network share
+
+`Test-RecyclableVolume` matched `\\*`, so `\\?\C:\…` — a local path — was answered with
+"a network location has no Recycle Bin". `isNetworkPath` in `staging.js` had the same
+bug and sent such paths down the staging branch, where they were copied and recycled
+from a staging directory instead of in place.
+
+The bridge now strips the prefix before judging (`\\?\UNC\host\share\x` becomes the
+ordinary UNC spelling, so the share rules see what they expect), and `isNetworkPath`
+judges the two prefixes separately.
+
+**Why strip rather than pass through:** `SHFileOperationW` does not accept the prefix at
+all. Measured: the same file returns `0x7C` (DE_INVALIDFILES) with the prefix and
+recycles without it, and a 316-character path recycles fine unprefixed — so stripping
+loses no capability and removes a false "network location" verdict.
+
+### Not done, on purpose
+
+The tool does not rename the offending entries, delete inside a directory it was asked
+to delete, or kill the process holding it. Each would make this test pass and be the
+wrong behaviour: they change the user's files or processes to satisfy a delete that the
+user asked for by name. The message is the deliverable.
+
+### Tests
+
+148 → **155** across ten layers. New layer ⑨ `test/diagnosis.test.mjs` (7 cases) pins
+both diagnoses, the prefix handling for local and UNC spellings, and that an absent path
+gets no diagnosis. Every case asserts the operator side too: the malformed child is still
+there afterwards, the held directory still has its contents, nothing was "fixed".
+
 ## [2.4.2] — 2026-11-25
 
 **Renumbering false positives from real measurements.** The rules from 2.3.0 / 2.4.0 were

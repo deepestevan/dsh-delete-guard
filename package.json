@@ -1,6 +1,6 @@
 {
   "name": "dsh-delete-guard",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "Force every DSH file deletion through the OS Recycle Bin. Intercepts shell tool calls at tools/pre-execute (pwsh, bash, cmd, the persistent terminal), rewrites destructive delete commands into a recoverable recycle-bin move (Win32 SHFileOperation / SHQueryRecycleBin), and blocks permanent-erase escapes — including content destroyed without a delete verb (in-place rewrites of the only copy, unchecked null slice endpoints). Deletions on UNC shares — which have no Recycle Bin — are staged to a local NTFS volume, verified, and recycled from there before the original is removed.",
   "type": "module",
   "main": "lib/index.js",

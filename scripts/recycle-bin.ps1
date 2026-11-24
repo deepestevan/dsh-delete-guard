@@ -87,9 +87,33 @@ function Write-Json {
 }
 
 function Resolve-NormalizedPath {
-    <#  Resolve to an absolute path without requiring existence.  #>
+    <#
+      Resolve to an absolute path without requiring existence, and drop a literal
+      `\\?\` prefix.
+
+      The prefix has one legitimate use — naming a path longer than MAX_PATH, or one
+      whose name Win32 would otherwise trim — and callers do hand it over. But
+      SHFileOperationW does not accept it: measured 2026-11-25, a `\\?\`-prefixed
+      file returns 0x7C (DE_INVALIDFILES) where the same file without the prefix
+      recycles. And a path over 260 characters recycles fine *without* the prefix, so
+      stripping loses nothing.
+
+      Left in place, the prefix was worse than useless: Test-RecyclableVolume matched
+      `\\*` and reported "a network location has no Recycle Bin" for a local path.
+
+      `\\?\UNC\host\share\x` becomes the ordinary UNC spelling, which is then judged
+      as the network location it is.
+    #>
     param([Parameter(Mandatory)][string] $Path)
-    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+
+    $text = $Path
+    if ($text.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $text = '\\' + $text.Substring(8)
+    } elseif ($text.StartsWith('\\?\', [System.StringComparison]::Ordinal)) {
+        $text = $text.Substring(4)
+    }
+
+    $expanded = [Environment]::ExpandEnvironmentVariables($text)
     $full = [System.IO.Path]::GetFullPath($expanded)
     # GetFullPath keeps a trailing separator on directories; SHFileOperationW
     # requires a double-null terminated list and tolerates either form, but a
@@ -112,13 +136,22 @@ function Get-DriveRoot {
 # --- Operations --------------------------------------------------------------
 
 function Get-ShFileOperationMessage {
-    <#  Map the documented SHFileOperation error codes to something readable.  #>
+    <#
+      Map the documented SHFileOperation error codes to something readable.
+
+      0x2 is deliberately **not** "the path no longer exists": measured 2026-11-25, a
+      directory whose contents include a name Win32 cannot address returns 0x2 while
+      the path is right there. The code means "one of the files it needed was not
+      found", and Get-FailureDiagnosis appends which one. The wording below says only
+      what the code supports.
+    #>
     param([Parameter(Mandatory)][int] $Code)
     # A bare `switch` statement with explicit `return`s: `return switch (...) { ... }`
     # is a parse error on this pwsh build ("unexpected token '{'").
     switch ($Code) {
-        0x2  { return 'The path no longer exists.' }
-        0x3  { return 'The directory does not exist.' }
+        0x2  { return 'A file in that path could not be found.' }
+        0x3  { return 'A directory in that path could not be found.' }
+        0x20 { return 'Access is denied.' }
         0x71 { return 'The source and destination are the same.' }
         0x72 { return 'The operation was cancelled.' }
         0x74 { return 'The path is too long.' }
@@ -127,6 +160,7 @@ function Get-ShFileOperationMessage {
         0x78 { return 'Access was denied.' }
         0x79 { return 'The operation was aborted.' }
         0x7A { return 'The source is in use by another process.' }
+        0x7B { return 'The path is invalid.' }
         0x7C { return 'The path is invalid.' }
         default { return ("SHFileOperationW failed with code 0x{0:X}" -f $Code) }
     }
@@ -161,6 +195,146 @@ function Test-RecyclableVolume {
     return "Volume $root has no Recycle Bin (file system: $shown), so recycling here would erase the item permanently. Move it to an NTFS volume first, or delete it from Explorer where Windows can warn the user."
 }
 
+function Get-NamesWin32CannotAddress {
+    <#
+      Find entries whose name Windows will not resolve when handed as a path.
+
+      A name ending in a space or a dot can exist on NTFS — WSL, a zip extractor, a
+      sync client or a port of a POSIX tool can create it — but Win32 trims those
+      trailing characters when the name is written into a path, so `Open` looks for a
+      name that is not there. That is why a directory holding such a child cannot be
+      recycled as a whole: SHFileOperationW walks the tree, the child's own open fails
+      with ERROR_FILE_NOT_FOUND, and the whole operation returns 0x2 even though the
+      path plainly exists.
+
+      The listing itself has to go through `\\?\` — that prefix is the only spelling in
+      which the name is taken literally. The prefix is used *here and only here*, to
+      read names; SHFileOperationW is never handed one (it returns 0x7C for those).
+
+      Returns up to `Limit` offending entries as `relative/path` strings, each with a
+      reason, so the message can name them.
+    #>
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [int] $Limit = 8
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return @() }
+
+    $found = [System.Collections.Generic.List[object]]::new()
+    $queue = [System.Collections.Generic.Queue[string]]::new()
+    $queue.Enqueue($Path)
+
+    while ($queue.Count -gt 0 -and $found.Count -lt $Limit) {
+        $current = $queue.Dequeue()
+
+        # Listing through the literal prefix, so a malformed name is returned as itself
+        # instead of being silently trimmed to a sibling that may not exist.
+        $literal = if ($current.StartsWith('\\')) { '\\?\UNC\' + $current.Substring(2) } else { '\\?\' + $current }
+        $entries = $null
+        try {
+            $entries = [System.IO.Directory]::GetFileSystemEntries($literal)
+        } catch {
+            # A tree we cannot enumerate is not this diagnostic's problem; the caller
+            # still reports the original failure.
+            return $found
+        }
+
+        foreach ($entry in $entries) {
+            if ($found.Count -ge $Limit) { break }
+
+            # The literal listing returns names with the prefix attached.
+            $name = [System.IO.Path]::GetFileName($entry)
+            $reason = $null
+            if ($name.EndsWith(' ')) { $reason = 'ends with a space' }
+            elseif ($name.EndsWith('.')) { $reason = 'ends with a dot' }
+            elseif ($name -match '[\x00-\x1F]') { $reason = 'contains a control character' }
+
+            if ($null -ne $reason) {
+                $relative = $entry
+                foreach ($prefix in @('\\?\UNC\', '\\?\')) {
+                    if ($relative.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+                        $relative = $relative.Substring($prefix.Length)
+                        break
+                    }
+                }
+                $found.Add([pscustomobject]@{ path = $relative; reason = $reason })
+            }
+
+            $isDirectory = $false
+            try { $isDirectory = [System.IO.Directory]::Exists($entry) } catch { $isDirectory = $false }
+            if ($isDirectory -and -not ($name.EndsWith(' ') -or $name.EndsWith('.'))) {
+                $queue.Enqueue($entry)
+            }
+        }
+    }
+
+    return $found.ToArray()
+}
+
+function Get-FailureDiagnosis {
+    <#
+      Turn a bare SHFileOperation failure into something a caller can act on.
+
+      Measured 2026-11-25. Two failures are worth diagnosing, because both used to
+      produce a message that pointed the caller at the wrong thing:
+
+      0x2  DE_FILENOTFOUND — the message said "the path no longer exists" while the
+           path was right there. The real cause was a child whose name Win32 cannot
+           address (trims a trailing space or dot), so the tree could not be walked.
+      0x20 DE_ACCESSDENIED  — a directory held as some process's working directory, or
+           an open file inside it. Every file inside can be deleted; the directory
+           itself cannot, and the shell reports access denied with no hint of who holds
+           it. Enumerating handles needs elevation, so this reports what is observable
+           and says so rather than guessing a PID.
+
+      Returns extra text to append to the message, or $null.
+    #>
+    param(
+        [Parameter(Mandatory)][int] $Code,
+        [Parameter(Mandatory)][string] $Path
+    )
+
+    $exists = $false
+    try { $exists = Test-Path -LiteralPath $Path } catch { $exists = $false }
+
+    if ($Code -eq 0x2) {
+        if (-not $exists) {
+            return 'The path is not there now — something else removed it between the check and the call.'
+        }
+        $bad = Get-NamesWin32CannotAddress -Path $Path
+        if ($bad.Count -eq 0) {
+            return $null
+        }
+        $shown = ($bad | ForEach-Object { "$($_.path) ($($_.reason))" }) -join '; '
+        $more = if ($bad.Count -ge 8) { ' (listing stopped at 8)' } else { '' }
+        # One expression, not several lines joined with `+`: a `return` ends the
+        # statement at the line break, so a trailing `+` continuation would return
+        # only the first fragment and silently drop the rest.
+        $text = "The path exists, but it contains entries Windows cannot open by name: $shown$more. "
+        $text += 'Win32 trims a trailing space or dot when a name is written into a path, so the tree cannot be walked. '
+        $text += 'Renaming those entries to names without a trailing space or dot makes the directory recyclable; '
+        $text += 'they are usually left by WSL, an archive extractor or a sync client. '
+        $text += 'This tool does not rename or delete inside a directory it was asked to delete.'
+        return $text
+    }
+
+    if ($Code -eq 0x20 -or $Code -eq 0x78 -or $Code -eq 0x7A) {
+        if (-not $exists) { return $null }
+        # The base message already says "access is denied"; start from the meaning.
+        $text = 'For a directory this usually means a process is using it: its working directory is set '
+        $text += 'to this path, or it holds one of the files inside open. Every file inside can still be '
+        $text += 'deleted individually; the directory itself cannot until that process lets go. '
+        $text += 'This tool does not enumerate which process holds it — that needs elevation or handle-scanning, '
+        $text += 'and it will not guess. If you need the holder, check for a process started in this directory '
+        $text += '(a Python environment, a build or a shell whose cwd is here), or retry after it exits.'
+        return $text
+    }
+
+    return $null
+}
+
+
 function Invoke-RecycleOne {
     <#
       Recycle a single path.
@@ -190,7 +364,12 @@ function Invoke-RecycleOne {
     )
 
     $rc = [RecycleBinNative]::SHFileOperationW([ref]$op)
-    if ($rc -ne 0) { return (Get-ShFileOperationMessage -Code $rc) }
+    if ($rc -ne 0) {
+        $message = Get-ShFileOperationMessage -Code $rc
+        $diagnosis = Get-FailureDiagnosis -Code $rc -Path $Path
+        if ($null -ne $diagnosis) { return "$message $diagnosis" }
+        return $message
+    }
     if ($op.fAnyOperationsAborted) { return 'The shell aborted the move to the Recycle Bin.' }
     # The call reports success for the whole request; confirm this path actually left.
     if (Test-Path -LiteralPath $Path) { return 'The path still exists after the recycle operation.' }
