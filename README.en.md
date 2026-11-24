@@ -2,12 +2,8 @@
 
 **English** | [简体中文](README.md) | [日本語](README.ja.md)
 
-**An agent cannot delete what it cannot recover.**
-
-A deletion has exactly two outcomes here: it lands in the Windows Recycle Bin
-(restorable from Explorer), or it is refused and re-issued as a `file_trash`
-call. There is no third one — and **writing the content away is the same thing as
-deleting it.**
+Refuses the delete commands a model issues and moves the target into the Windows
+Recycle Bin instead.
 
 ```
 agent:   Remove-Item -Recurse -Force .\src
@@ -121,7 +117,7 @@ block — restate every key you want to keep):
 
 ## Restoring a deleted file
 
-Restoring is not a plugin feature and needs none: the bin belongs to the OS.
+Restoring is handled by the OS Recycle Bin.
 Explorer's right-click "Restore" works. From a script, read the
 `X:\$Recycle.Bin\<SID>\$I*` records (offset 24 = original path length in chars,
 offset 28 = UTF-16LE path), match the one you want, and `Move-Item` its paired `$R`
@@ -167,14 +163,13 @@ space** on the staging volume.
 | A delete split across two terminal sends | Each send is judged on its own text |
 | Non-Windows platforms | The bridge is `SHFileOperationW` |
 | Free-space exhaustion | A same-volume NTFS recycle is a rename and consumes no space, so there is nothing to pre-check |
-| **Overwriting without reading** (`echo x > notes.md`, `Invoke-WebRequest -OutFile`, `git checkout -- f`) | A deliberate rewrite, not read-modify-write: the new content does not depend on the old, and `write`/`edit` do the same thing |
+| **Overwriting without reading** (`echo x > notes.md`, `Invoke-WebRequest -OutFile`, `git checkout -- f`) | The new content does not depend on the old, so this is not read-modify-write |
 | **Indirect writes inside a read-modify-write** (compilers, `npm run build`, `robocopy` over build output) | The write happens in a child process; the command text names no provable target |
-| Judging a truncation by size afterwards | Rolling back needs the old bytes, which must be copied *before* the write; `tools/post-execute` can only turn a result into feedback |
-| Moving something off a share (`Move-Item`, `robocopy /MOV`) | That is a move, not a delete: the content reaches the destination, but the share copy is unlinked for good and no bin record exists. `file_trash` is the path that keeps one |
+| Judging a truncation by size afterwards | Rolling back needs the old bytes, and `tools/post-execute` can only turn a result into feedback |
+| Moving something off a share (`Move-Item`, `robocopy /MOV`) | The content reaches the destination, but the share copy is unlinked for good and no bin record exists |
 
 Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
-`terminal_send`, `terminal_write`. Reasoning and measurements:
-the decision is made on the statement's command word, the shape of the call, and program position — never on a word appearing somewhere in the line.
+`terminal_send`, `terminal_write`.
 
 ## Tests
 
@@ -200,9 +195,7 @@ log and config rewrites) still passes.
 | [docs/incidents/](docs/incidents/) | Measured evidence behind each rule, with the verbatim command (not in the npm package) |
 | [LICENSE](LICENSE) | MIT |
 
-Incident records stay in the repository because they are the evidence for the rules: a
-rule whose origin — which command, under what conditions, with what result — is
-unavailable can only be maintained by guessing.
+
 
 ## License
 
