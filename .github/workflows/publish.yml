@@ -42,9 +42,16 @@ jobs:
       - name: npm ≥ 11.5.1
         run: npm install -g npm@latest && npm --version
 
-      # The package has no runtime dependencies, so there is nothing to install.
-      # `test/` is not shipped, but the pure layers still run here: two of the five
-      # layers need a DSH install and report as skipped, which is expected.
+      # `lib/index.js` imports `@deepseek-ai/schemastery` for the config schema, so the
+      # runtime dependency has to be present before the tests run. The suite passed
+      # locally for a while after that import was added, because the development tree
+      # already had `node_modules` — CI had none, and every layer that loads the plugin
+      # failed with ERR_MODULE_NOT_FOUND.
+      - name: install dependencies
+        run: npm install --no-audit --no-fund
+
+      # `test/` is not shipped, but the pure layers still run here: the ones that need a
+      # DSH install or a win32 host report as skipped, which is expected.
       - name: tests (pure layers)
         run: node test/run-all.mjs
 
