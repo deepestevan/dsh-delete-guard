@@ -132,7 +132,7 @@ Note the asymmetry: "no permanent delete" is a policy, not an invariant — `Add
 C# still reaches `DeleteFileW`, as the README's 「不挡什么」 table says. The choice
 above keeps the *easy* path safe, which is what a policy layer can actually do.
 
-## How the rules were calibrated (2026-11-25)
+## How the rules were calibrated (2026-11-24)
 
 The rules from 2.3.0 / 2.4.0 each came from one incident. 2.4.2 came from a
 measurement: **62,131 shell commands that actually ran on this machine** (5,746 session

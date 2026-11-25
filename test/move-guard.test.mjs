@@ -37,7 +37,7 @@ function fakeExec(overrides = {}) {
     name: 'file_trash',
     arguments: {},
     signal: new AbortController().signal,
-    agent: { session: { cwd: CWD } },
+    agent: { session: { header: { cwd: CWD } } },
     ...overrides,
   };
 }

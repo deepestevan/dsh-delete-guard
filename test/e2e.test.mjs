@@ -40,7 +40,10 @@ function fakeExec(overrides = {}) {
     name: 'file_trash',
     arguments: {},
     signal: new AbortController().signal,
-    agent: { session: { cwd: process.cwd() } },
+    // The host's real shape: `Session` exposes `header`, and the cwd lives on it.
+    // Faking `session.cwd` made the code and its tests agree on a property the host
+    // does not have, which is how every relative path stayed broken unnoticed.
+    agent: { session: { header: { cwd: process.cwd() } } },
     ...overrides,
   };
 }
@@ -104,22 +107,48 @@ test('file_trash recycles a directory tree as one unit', async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-test('file_trash resolves workspace-relative paths against the session cwd', async () => {
+test('file_trash resolves a relative path against the session cwd, not the plugin cwd', async () => {
   const { definition } = await loadTrashTool();
 
   const dir = await mkdtemp(join(tmpdir(), 'dsh-trash-e2e-rel-'));
   await writeFile(join(dir, 'relative.txt'), 'x', 'utf8');
+  assert.notEqual(dir, process.cwd(), 'the probe directory must differ from the plugin cwd, or the test proves nothing');
 
   const result = await definition.execute(
     { paths: ['relative.txt'] },
-    fakeExec({ agent: { session: { cwd: dir } } }),
+    fakeExec({ agent: { session: { header: { cwd: dir } } } }),
   );
 
-  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.failures, [], `relative path did not resolve against the session cwd: ${JSON.stringify(result.failures)}`);
   assert.equal(result.recycled.length, 1);
   await assert.rejects(() => stat(join(dir, 'relative.txt')), /ENOENT/);
 
   await rm(dir, { recursive: true, force: true });
+});
+
+test('a session carrying only the legacy `cwd` still resolves, but the header wins', async () => {
+  // `session.cwd` is kept for callers that pass it directly; it must never be preferred
+  // over the host's own `header.cwd`.
+  const { definition } = await loadTrashTool();
+
+  const realDir = await mkdtemp(join(tmpdir(), 'dsh-trash-e2e-hdr-'));
+  const decoyDir = await mkdtemp(join(tmpdir(), 'dsh-trash-e2e-decoy-'));
+  await writeFile(join(realDir, 'both.txt'), 'x', 'utf8');
+  await writeFile(join(decoyDir, 'both.txt'), 'y', 'utf8');
+
+  const result = await definition.execute(
+    { paths: ['both.txt'] },
+    fakeExec({ agent: { session: { header: { cwd: realDir }, cwd: decoyDir } } }),
+  );
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.recycled[0], join(realDir, 'both.txt'), 'header.cwd must win over the legacy property');
+  await assert.rejects(() => stat(join(realDir, 'both.txt')), /ENOENT/);
+  // The decoy was not touched.
+  assert.ok((await stat(join(decoyDir, 'both.txt'))).isFile());
+
+  await rm(realDir, { recursive: true, force: true });
+  await rm(decoyDir, { recursive: true, force: true });
 });
 
 test('a missing path is reported as a failure, not a crash', async () => {

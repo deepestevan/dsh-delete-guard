@@ -41,10 +41,10 @@ DSH 里模型执行 `pwsh` 的删除命令，文件是被直接抹掉的：`ctx.
 # 从 npm 安装
 dsh plugin --profile web add dsh-delete-guard
 # 或直接从仓库安装（npm 不可用时）
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.4
 # 或者从本地 tarball（改过源码时用这条）
 pnpm pack --pack-destination ./temp/pack     # 先升 package.json 的 version
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.2.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.4.tgz
 # 重启 dsh web：lib/*.js 只在进程启动时加载
 ```
 
@@ -94,7 +94,8 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml` 里覆盖（`config` 是整块替换，要保留的键必须重述）：
+在 profile 的 `cordis.patch.yml` 里覆盖（`config` 是整块替换：没写的键取默认值，默认全是 `true`；
+要把某个键保留在 `false`，必须重述它）：
 
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
@@ -155,8 +156,8 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 | 读改写里的**间接**写（编译器、`npm run build`、`robocopy` 覆盖产物） | 写入发生在子进程内部，命令文本里没有可判定的目标 |
 | 写完之后按体积判断有没有被截断 | 回滚需要覆盖前的旧内容，而 `tools/post-execute` 只能把结果改成反馈 |
 | 把共享上的东西 `Move-Item` / `robocopy /MOV` 到本地 | 内容到了目标位置，但共享上的原件被永久删除，没有回收站记录 |
-| **内含非法名字的目录**（名字以空格或点结尾，再由 WSL、解压工具或同步客户端留下） | Win32 写到路径里会截掉尾随的空格/点，所以目录树走不完。工具会指出是哪个条目、为什么，但**不替你改名或删除** |
-| **被进程占用的目录**（工作目录设在里面，或里面某个文件开着） | 里面的文件可以逐个删，目录本身要等占用释放。工具会说这是占用，但**不去查是哪个进程**——那需要提权或枚举句柄，猜一个 PID 比不给更糟 |
+| **内含非法名字的目录**（名字以空格或点结尾，再由 WSL、解压工具或同步客户端留下） | Win32 写到路径里会截掉尾随的空格/点，所以目录树走不完。工具会指出是哪个条目、为什么；把那个名字改成不以空格或点结尾即可 |
+| **被进程占用的目录**（工作目录设在里面，或里面某个文件开着） | 占用它的进程退出后才能删。工具会说这是占用，并可据此去查是谁——它不代查 |
 
 覆盖的 shell 工具名：`pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`、`shell`、
 `terminal_send`、`terminal_write`。
@@ -167,9 +168,9 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 node test/run-all.mjs
 ```
 
-155 项、十层：命令分类（50）、覆盖守卫（30）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（15）、
-宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（14，含真 `\\localhost\C$` 路径）、
-失败诊断（7）。
+211 项、十四层：命令分类（50）、覆盖守卫（32）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（15）、
+宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（15，含真 `\\localhost\C$` 路径）、
+失败诊断（7）、跨 shell 判定（14）、快筛一致性（4）、逃逸形态（27）、参数形状（8）。
 `test/` 不进 tarball，所以打包前必须全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
 另有一层文档检查（`scripts/verify-readme-structure.mjs`）：三份 README 的章节数与表格行数必须一致。
 
@@ -177,9 +178,9 @@ node test/run-all.mjs
 
 | 文件 | 内容 |
 | --- | --- |
-| [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么、为什么 |
+| [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么 |
 | [SECURITY.md](SECURITY.md) | 威胁模型：策略层，不是沙箱 |
-| [docs/incidents/](docs/incidents/) | 规则的实测依据与逐字命令（不进 npm 包） |
+| [docs/incidents/](docs/incidents/) | 规则的实测依据与逐字命令，见 GitHub 仓库 |
 | [LICENSE](LICENSE) | MIT |
 
 ## 许可

@@ -2,18 +2,20 @@
  * End-to-end tests for the two failures that used to arrive as a message pointing at
  * the wrong thing.
  *
- * Measured 2026-11-25 on this machine:
+ * Measured 2026-11-24 on this machine:
  *
  *   - a directory containing a child whose name ends with a space or a dot cannot be
  *     recycled: SHFileOperationW returns 0x2 (DE_FILENOTFOUND) and the old message
  *     said "the path no longer exists" while the path was right there;
  *   - a directory held as some process's working directory returns 0x20
- *     (DE_ACCESSDENIED), while every file inside can be deleted individually.
+ *     (DE_ACCESSDENIED).
  *
- * The fix is diagnosis, not capability: the message now names the offending entries,
- * or says what "access denied" means for a directory and that the tool will not guess
- * which process holds it. These tests pin the message, and pin that nothing is
- * deleted, renamed or "worked around" on the user's behalf.
+ * The fix is diagnosis, not capability: the message names the offending entries, or
+ * says what "access denied" means for a directory and how to find the holder. What it
+ * must NOT do is narrate the tool's own restraint — the caller reads the reply to find
+ * its next action, not to audit the tool. The tests assert the useful content and the
+ * absence of that self-description, plus that nothing is deleted or renamed on the
+ * user's behalf.
  *
  * Windows-only: the whole bridge is SHFileOperationW.
  */
@@ -52,7 +54,7 @@ function fakeExec() {
     name: 'file_trash',
     arguments: {},
     signal: new AbortController().signal,
-    agent: { session: { cwd: process.cwd() } },
+    agent: { session: { header: { cwd: process.cwd() } } },
   };
 }
 
@@ -95,8 +97,9 @@ test('a directory whose child name Win32 cannot open is diagnosed, not misreport
   // It has to name the offending entry, otherwise the caller has to search for it.
   assert.match(message, /trailing-space/);
   assert.match(message, /ends with a space/i);
-  // And it must not claim to have fixed anything.
-  assert.match(message, /does not rename or delete/i);
+  // The next action, not a statement about what this tool declines to do.
+  assert.match(message, /renaming those entries/i);
+  assert.doesNotMatch(message, /this tool does not/i);
 
   // Nothing was touched: the malformed child is still there, and so is the directory.
   const names = await readdir(LITERAL_PREFIX + dir);
@@ -119,7 +122,7 @@ test('a trailing dot is diagnosed the same way', { skip: !WINDOWS }, async () =>
   await rm(dir, { recursive: true, force: true });
 });
 
-test('access denied on a directory says what it means and refuses to guess the holder', { skip: !WINDOWS }, async () => {
+test('access denied on a directory names the likely holder and how to find it', { skip: !WINDOWS }, async () => {
   const { definition } = loadTrashTool();
   const dir = await mkdtemp(join(tmpdir(), 'dsh-diag-cwd-'));
   await writeFile(join(dir, 'inside.txt'), 'i', 'utf8');
@@ -139,12 +142,15 @@ test('access denied on a directory says what it means and refuses to guess the h
     const message = result.failures[0].error;
 
     assert.match(message, /access is denied/i);
-    // Says what a directory-level denial usually means...
+    // Says what a directory-level denial means and that it clears when the holder exits.
     assert.match(message, /working directory|holds one of the files/i);
-    // ...that contents can still go individually...
-    assert.match(message, /deleted individually/i);
-    // ...and that it will not invent a PID it cannot verify.
-    assert.match(message, /will not guess/i);
+    assert.match(message, /once .* process exits|retry later/i);
+    // And offers a way to find the holder rather than a disclaimer about the tool.
+    assert.match(message, /look for a process started in this directory/i);
+    assert.doesNotMatch(message, /will not guess|does not enumerate/i);
+    // It must not send the caller to delete a directory's contents one by one: that
+    // never removes the directory, which is what was asked for.
+    assert.doesNotMatch(message, /individually/i);
 
     // The directory really is still there.
     assert.deepEqual(await readdir(dir), ['inside.txt']);

@@ -307,6 +307,31 @@ test('order: a read after the write is a read-back, not a source', () => {
   assertDeny('Get-Content $f | Set-Content $f', 'in-place-rewrite');
 });
 
+test('order: a realistic scan-to-file command is a read-back', () => {
+  // Verbatim from a live session (554a79ed, refused 2026-11-22 under 2.2.3). The shape
+  // is ordinary: define variables, run a tool into a file, print the path, peek at the
+  // head. The only read is the peek, and it comes after the write. Five such commands
+  // were refused in a row, and the model reworded the same request each time.
+  assertAllow([
+    "$env:PYTHONIOENCODING='utf-8'",
+    "$py='C:\\app\\.venv\\Scripts\\python.exe'",
+    "$scan='C:\\tools\\scan_books.py'",
+    "$root='D:\\comic'",
+    "$out='C:\\work\\todo-list.txt'",
+    '& $py $scan --root $root --list todo --limit 99999 | Out-File -FilePath $out -Encoding utf8',
+    'Write-Output $out',
+    'Get-Content $out -TotalCount 12',
+  ].join('\n'));
+});
+
+test('order: a read that precedes the last write may have fed it', () => {
+  // The mirror of the exemption above. `Set-Content f 'x'; $old = Get-Content f;
+  // Set-Content f $old` is the incident with a write in front of it, so the exemption
+  // must not apply: nothing in the text proves the last write ignored the read.
+  assertDeny("'x' | Set-Content $f; Get-Content $f; 'y' | Set-Content $f", 'in-place-rewrite');
+  assertDeny("'x' | Set-Content $f; $o = Get-Content $f; Set-Content $f $o", 'in-place-rewrite');
+});
+
 test('.NET writes participate in the order check', () => {
   // Giving .NET writes no statement index made the last-write lookup return -1,
   // which emptied the read set and let 223 historical commands through.

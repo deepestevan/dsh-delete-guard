@@ -44,10 +44,10 @@ Git Bash の `/c/...` パス、ごみ箱を空にするあらゆる書き方に�
 # npm から導入
 dsh plugin --profile web add dsh-delete-guard
 # またはリポジトリから直接
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.4
 # またはローカルの tarball から（ソースを変更したとき）
 pnpm pack --pack-destination ./temp/pack     # 先に package.json の version を上げる
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.2.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.4.tgz
 # dsh web を再起動（lib/*.js はプロセス起動時に読み込まれる）
 ```
 
@@ -99,8 +99,8 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 
 ## 設定
 
-プロファイルの `cordis.patch.yml` で上書きします（`config` はブロックごと置き換わるので、
-残したいキーはすべて書き直す）：
+プロファイルの `cordis.patch.yml` で上書きします（`config` はブロックごと置き換わり、
+書かなかったキーは既定値（すべて `true`）になります。`false` にしたキーを維持するには書き直してください）：
 
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
@@ -159,8 +159,8 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 | 読み書きの中の**間接的な書き込み**（コンパイラ、`npm run build`、`robocopy` の成果物） | 書き込みは子プロセス内で起き、コマンドテキストに証明できる対象が無い |
 | 書き込み後のサイズ比較・ロールバック | 戻すには書き込み前のバイト列が必要で、結局は対象の列挙問題に戻る。`tools/post-execute` は結果をフィードバックに変えるだけで、切り詰めを巻き戻せない。毎回ツリーをスナップショットするのは O(ワークスペース) で、しかも UNC 上の対象は含まれない |
 | 共有上のものを `Move-Item` / `robocopy /MOV` で移動 | 内容は移動先に残るが、共有側は完全に unlink され、ごみ箱の記録も残らない |
-| **Windows が開けない名前を含むディレクトリ**（末尾が空白またはピリオド。WSL・解凍ツール・同期クライアントが残す） | Win32 はパスに書くとき末尾の文字を切り落とすため、ツリーを走査できない。どの項目がなぜ駄目かは伝えるが、**代わりに改名・削除はしない** |
-| **プロセスが使用中のディレクトリ**（作業ディレクトリに設定されている、または中のファイルが開かれている） | 中のファイルは個別に消せるが、ディレクトリ本体は解放待ち。使用中であることは伝えるが、**どのプロセスかは調べない**——権限昇格かハンドル列挙が必要で、推測した PID は無いより悪いため |
+| **Windows が開けない名前を含むディレクトリ**（末尾が空白またはピリオド。WSL・解凍ツール・同期クライアントが残す） | Win32 はパスに書くとき末尾の文字を切り落とすため、ツリーを走査できない。どの項目がなぜ駄目かは伝える。末尾が空白・ピリオドでなくなるよう改名すれば削除できる |
+| **プロセスが使用中のディレクトリ**（作業ディレクトリに設定されている、または中のファイルが開かれている） | そのプロセスが終了すれば削除できる。使用中であることは伝えるので、原因を探す手がかりにはなるが、代わりに探しには行かない |
 
 対象のシェルツール名：`pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`、`shell`、
 `terminal_send`、`terminal_write`。判定は文の命令語・呼び出しの形・プログラム位置で行い、行内に語が現れたかどうかでは見ません。
@@ -171,9 +171,10 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 node test/run-all.mjs
 ```
 
-10 層・155 ケース：コマンド分類（50）、上書きガード（30）、規則の穴（12）、共有ステージング（8）、
+14 層・211 ケース：コマンド分類（50）、上書きガード（32）、規則の穴（12）、共有ステージング（8）、
 `file_trash` オペランドガード（15）、ホストのスキーマとフック配線（14）、ホストのスキーマ受理（5）、
-実ごみ箱に対するエンドツーエンド（14、実 `\\localhost\C$` パスを含む）、失敗診断（7）。`test/` は tarball に
+実ごみ箱に対するエンドツーエンド（15、実 `\\localhost\C$` パスを含む）、失敗診断（7）、
+シェル横断の判定（14）、事前フィルタの一貫性（4）、回避形態（27）、引数の形状（8）。`test/` は tarball に
 含まれないので、パック前に緑である必要があります。うち 2 層はホスト自身の検証器を読み込むため、
 DSH のインストールが無い環境では失敗ではなく**スキップ**として報告されます。
 さらにドキュメント用の層（`scripts/verify-readme-structure.mjs`）があり、3 つの README の
@@ -183,9 +184,9 @@ DSH のインストールが無い環境では失敗ではなく**スキップ**
 
 | ファイル | 内容 |
 | --- | --- |
-| [CHANGELOG.md](CHANGELOG.md) | バージョン摘要 |
+| [CHANGELOG.md](CHANGELOG.md) | 各バージョンの変更点 |
 | [SECURITY.md](SECURITY.md) | 脅威モデル：サンドボックスではなくポリシー層 |
-| [docs/incidents/](docs/incidents/) | 各規則の根拠となる実測と逐語コマンド（npm パッケージには含まれません） |
+| [docs/incidents/](docs/incidents/) | 各規則の根拠となる実測と逐語コマンド（GitHub リポジトリ内） |
 | [LICENSE](LICENSE) | MIT |
 
 

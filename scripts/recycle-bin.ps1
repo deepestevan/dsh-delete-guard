@@ -93,7 +93,7 @@ function Resolve-NormalizedPath {
 
       The prefix has one legitimate use — naming a path longer than MAX_PATH, or one
       whose name Win32 would otherwise trim — and callers do hand it over. But
-      SHFileOperationW does not accept it: measured 2026-11-25, a `\\?\`-prefixed
+      SHFileOperationW does not accept it: measured 2026-11-24, a `\\?\`-prefixed
       file returns 0x7C (DE_INVALIDFILES) where the same file without the prefix
       recycles. And a path over 260 characters recycles fine *without* the prefix, so
       stripping loses nothing.
@@ -139,7 +139,7 @@ function Get-ShFileOperationMessage {
     <#
       Map the documented SHFileOperation error codes to something readable.
 
-      0x2 is deliberately **not** "the path no longer exists": measured 2026-11-25, a
+      0x2 is deliberately **not** "the path no longer exists": measured 2026-11-24, a
       directory whose contents include a name Win32 cannot address returns 0x2 while
       the path is right there. The code means "one of the files it needed was not
       found", and Get-FailureDiagnosis appends which one. The wording below says only
@@ -276,17 +276,19 @@ function Get-FailureDiagnosis {
     <#
       Turn a bare SHFileOperation failure into something a caller can act on.
 
-      Measured 2026-11-25. Two failures are worth diagnosing, because both used to
+      Measured 2026-11-24. Two failures are worth diagnosing, because both used to
       produce a message that pointed the caller at the wrong thing:
 
       0x2  DE_FILENOTFOUND — the message said "the path no longer exists" while the
            path was right there. The real cause was a child whose name Win32 cannot
            address (trims a trailing space or dot), so the tree could not be walked.
       0x20 DE_ACCESSDENIED  — a directory held as some process's working directory, or
-           an open file inside it. Every file inside can be deleted; the directory
-           itself cannot, and the shell reports access denied with no hint of who holds
-           it. Enumerating handles needs elevation, so this reports what is observable
-           and says so rather than guessing a PID.
+           an open file inside it. The shell reports access denied with no hint of who
+           holds it, and enumerating handles needs elevation. So the message names the
+           likely holder and says the directory frees up when it exits.
+
+      Both messages stop at what the caller should do next. They do not describe what
+      this tool declines to do: the caller is not reading the reply to audit the tool.
 
       Returns extra text to append to the message, or $null.
     #>
@@ -311,23 +313,32 @@ function Get-FailureDiagnosis {
         # One expression, not several lines joined with `+`: a `return` ends the
         # statement at the line break, so a trailing `+` continuation would return
         # only the first fragment and silently drop the rest.
+        #
+        # Says what to do and stops. An earlier version ended with "this tool does not
+        # rename or delete inside a directory it was asked to delete" — a sentence
+        # about the tool, not about the caller's problem. The caller needs the next
+        # action, not an inventory of what was refused.
         $text = "The path exists, but it contains entries Windows cannot open by name: $shown$more. "
         $text += 'Win32 trims a trailing space or dot when a name is written into a path, so the tree cannot be walked. '
-        $text += 'Renaming those entries to names without a trailing space or dot makes the directory recyclable; '
-        $text += 'they are usually left by WSL, an archive extractor or a sync client. '
-        $text += 'This tool does not rename or delete inside a directory it was asked to delete.'
+        $text += 'Renaming those entries so the name no longer ends with a space or dot makes the directory deletable; '
+        $text += 'they are usually left by WSL, an archive extractor or a sync client.'
         return $text
     }
 
     if ($Code -eq 0x20 -or $Code -eq 0x78 -or $Code -eq 0x7A) {
         if (-not $exists) { return $null }
         # The base message already says "access is denied"; start from the meaning.
+        #
+        # No "every file inside can still be deleted individually": it is true, and it
+        # sends the caller at a directory with thousands of entries to delete them one
+        # at a time without ever removing the directory, which is the thing it asked
+        # for. No "this tool will not guess which process": the caller does not need an
+        # account of the tool's limits, it needs to know the holder exists and how to
+        # find it.
         $text = 'For a directory this usually means a process is using it: its working directory is set '
-        $text += 'to this path, or it holds one of the files inside open. Every file inside can still be '
-        $text += 'deleted individually; the directory itself cannot until that process lets go. '
-        $text += 'This tool does not enumerate which process holds it — that needs elevation or handle-scanning, '
-        $text += 'and it will not guess. If you need the holder, check for a process started in this directory '
-        $text += '(a Python environment, a build or a shell whose cwd is here), or retry after it exits.'
+        $text += 'to this path, or it holds one of the files inside open. The directory can be deleted once '
+        $text += 'that process exits. To find it, look for a process started in this directory — a Python '
+        $text += 'environment, a build, or a shell whose working directory is here — or just retry later.'
         return $text
     }
 

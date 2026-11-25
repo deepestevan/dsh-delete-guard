@@ -45,6 +45,15 @@ const suites = [
   // file: it checks that the three READMEs still have the same sections and table
   // size. The leading marker selects how it is invoked.
   ['⑩ 文档结构', 'script:../scripts/verify-readme-structure.mjs'],
+  // The same command text under both shells: one translation shared by the classifier
+  // and `file_trash`, plus the merge for tools that do not say which shell they run.
+  ['⑪ 跨 shell 判定', 'cross-shell.test.mjs', WINDOWS_ONLY],
+  // Every classifier kind must survive the hook's pre-filter, and every escape shape
+  // found by review is pinned with its near neighbour that must keep working.
+  ['⑫ 快筛一致性', 'kind-matrix.test.mjs'],
+  ['⑬ 逃逸形态', 'escapes.test.mjs'],
+  // What `file_trash` accepts as arguments, and what it says when it cannot use them.
+  ['⑭ 参数形状', 'paths-shape.test.mjs', WINDOWS_ONLY],
 ];
 
 let failed = 0;

@@ -1,13 +1,82 @@
 # Changelog
 
 All notable changes to this plugin. Dates are the day the tarball was packed on
-this machine (`temp/pack/dsh-delete-guard-<ver>.tgz`), which is the artifact
-each profile actually ran.
+this machine (`temp/pack/dsh-delete-guard-<ver>.tgz`), which is the artifact each
+profile actually ran — local time, UTC+8.
 
-The long-form reasoning behind every entry — what was measured, what was
-rejected, what the trade-off costs — lives in the maintainer's engineering notes (`INCIDENTS.md`, not shipped since 2.2.0).
+The detail behind an entry — what was measured, what was rejected, what a trade-off costs
+— sits in the code comments and under `docs/`. Neither ships in the npm package.
 
-## [2.4.3] — 2026-11-26
+## [2.4.4] — 2026-11-25
+
+**A hardening release.** Six ways past the guard were closed, five refusals that should not
+have happened were removed, and `file_trash` itself was fixed in three places. Nothing needs
+reconfiguring; every rule stays on by default.
+
+### Closed: deletes that reached the host
+
+Each of these was promised by the README and did not work on the path the host actually
+runs.
+
+| Shape | Was | Now |
+|---|---|---|
+| `[System.IO.File]::Delete(…)`, `FileInfo::new($p).Delete()`, `FileSystem::DeleteFile(…)` | refused by the classifier, allowed by the filter that runs first — so executed | refused |
+| `cmd /d /x /c sdelete …`, `Start-Process -WindowStyle Hidden -PassThru -FilePath shred …` | allowed: a launcher's own switches moved the payload out of the checked window | refused |
+| `Start-Process -ArgumentList "…" -FilePath shred` | allowed: the scan stopped at `-ArgumentList`, so a later `-FilePath` was never read — the same call written in the other order was refused | refused, whatever the order |
+| `cmd /c powershell -c sdelete …`, `powershell -NoProfile shred …`, `cmd /c if exist … sdelete …` | allowed: a shell runs the program named in its arguments, and the check only looked at the statement's first word | the command line is read through, statement by statement |
+| `cmd /c` nested five deep around `sdelete …` | allowed: the nesting ran out of the depth the parser reads, and running out answered "not a wipe" | refused — a command too nested to read is not cleared |
+| `pwsh -enc <base64>`, `-Encoded`, `-e` | allowed: only the full `-EncodedCommand` was decoded | refused |
+| `& ([scriptblock]::Create("Remove-Item …"))` | allowed: the body was never read | judged by its body |
+| `Format-Volume`, `Clear-Disk`, `Initialize-Disk` | allowed | refused |
+| `InvokeVerb('Purge')` / `InvokeVerb()` on a bin item | allowed: a destroy verb that no list named was not treated as one | refused |
+
+### Closed: refusals that were wrong
+
+| Shape | Was | Now |
+|---|---|---|
+| `[scriptblock]::Create("Write-Output (1+1)")` | refused as "only known at run time" — the body contains a parenthesis | allowed |
+| `Select-String -Pattern '$Recycle.Bin'; …; $x.InvokeVerb('copy')` | refused as emptying the bin | allowed |
+| `Start-Process notepad -ArgumentList "sdelete.exe"` | refused as a wipe | allowed |
+| `cmd /c echo sdelete`, `cmd /c dir C:\tools\shred` | refused, in 2.4.3 too, for the same reason | allowed |
+| `powershell -Command "Get-Command shred"`, `-Command "Select-String shred notes.txt"` | refused: the wipe name was matched anywhere in the command line, so naming one was the same as running it | allowed |
+| `InvokeVerb('undelete')` on a bin item | refused as a delete | allowed, like `'Restore'` |
+
+### Fixed: `file_trash`
+
+- **A relative path resolved against the wrong directory.** The session working directory
+  was read as `session.cwd`; the host exposes `session.header.cwd`. The lookup was always
+  empty, so every relative path resolved against wherever `dsh web` was started and a file
+  that existed was reported as missing.
+- **Git Bash paths** — `/c/…` and `/cygdrive/c/…` now reach `file_trash` through the same
+  translation the shell commands already used. Before, they were resolved against the
+  plugin process's drive.
+- **`paths` shapes.** A single path written as a bare string was discarded; an array
+  serialised into its own JSON text became one long file name. Both now converge through a
+  single filter, and an unusable argument reports what arrived instead of "no usable paths
+  were supplied".
+
+### Changed in a way you might notice
+
+- A command typed into a persistent terminal is judged under both shells and the verdicts
+  merged, because the terminal does not report which shell it runs. `pwsh` and `bash` are
+  unchanged.
+- A refusal for an untranslatable target names the form that was written — a variable, a
+  braced variable, a subexpression, a backtick — instead of calling all four a command
+  substitution. Two sentences that described the tool's own restraint instead of the
+  caller's next action were removed.
+- A quoted operand is no longer split on its commas: `Remove-Item "[a,b].txt"` is one
+  file, and the refusal used to name `[a` and `b].txt` as the targets to recycle.
+- Configuration is declared with schemastery, so a typo is reported rather than coerced and
+  `stagingRoot` becomes discoverable. A rule turned off by configuration now logs a warning.
+- The injected policy section is 990 characters instead of 2,825.
+
+### Internal
+
+Tests 148 → 211 across fourteen layers. Two of the new layers check structure rather than
+cases: one drives a representative of every refusal kind through the hook, the other pairs
+each escape shape with a near neighbour that must still pass.
+
+## [2.4.3] — 2026-11-24
 
 **A failed delete now says what actually failed.** Reported from use: a directory whose
 files could all be deleted would not delete itself, and the model worked around it by
@@ -20,7 +89,7 @@ A name ending in a space or a dot can exist on NTFS — WSL, an archive extracto
 client or a port of a POSIX tool creates them — but Win32 trims those trailing
 characters when a name is written into a path. `SHFileOperationW` walks the tree, the
 child's own open fails with `ERROR_FILE_NOT_FOUND`, and the whole call returns `0x2`.
-Measured 2026-11-25: a directory with one such child refuses; the same directory with
+Measured 2026-11-24: a directory with one such child refuses; the same directory with
 the child's name normalised recycles.
 
 The old message was a lie about the path. It now names the offending entries and says
@@ -33,12 +102,12 @@ A directory held as some process's working directory, or holding an open file, r
 `DE_ACCESSDENIED`. Every file inside can still be deleted; the directory cannot, until
 the process lets go. That is exactly the reported symptom.
 
-The message now says a process is probably using it, that the contents can still go
-individually, and that this tool **will not guess** which process — enumerating handles
-needs elevation, and a screenshot of a guessed PID list would be worse than no answer.
-Note what is *not* claimed: a share-mode probe of the directory does not detect a cwd
-holder (measured — it opens cleanly), so there is no cheap reliable detector, which is
-why this is a message rather than a verdict.
+The message now says a process is probably using it, what that means for the directory,
+and how to find it. A share-mode probe of the directory does not detect a cwd holder
+(measured — it opens cleanly), so there is no cheap reliable detector; the reply
+describes the likely holder rather than asserting one.
+
+*The wording of both messages was revised in 2.4.4 — see that entry.*
 
 ### The `\\?\` prefix was refused as a network share
 
@@ -58,19 +127,20 @@ loses no capability and removes a false "network location" verdict.
 
 ### Not done, on purpose
 
-The tool does not rename the offending entries, delete inside a directory it was asked
-to delete, or kill the process holding it. Each would make this test pass and be the
-wrong behaviour: they change the user's files or processes to satisfy a delete that the
-user asked for by name. The message is the deliverable.
+The tool does not rename the offending entries or kill the process holding a directory.
+Both would make the failure go away and both change the user's files or processes to
+satisfy a delete; the message says what to do instead.
 
 ### Tests
 
 148 → **155** across ten layers. New layer ⑨ `test/diagnosis.test.mjs` (7 cases) pins
 both diagnoses, the prefix handling for local and UNC spellings, and that an absent path
-gets no diagnosis. Every case asserts the operator side too: the malformed child is still
-there afterwards, the held directory still has its contents, nothing was "fixed".
+gets no diagnosis. The message assertions are two-sided: they require the useful content
+(the offending entry, the likely holder, the next action) and require the tool's own
+self-description to be absent. Every case also asserts the operator side — the malformed
+child is still there afterwards, the held directory still has its contents.
 
-## [2.4.2] — 2026-11-25
+## [2.4.2] — 2026-11-24
 
 **Renumbering false positives from real measurements.** The rules from 2.3.0 / 2.4.0 were
 built from one incident each. This release is built from **62,131 shell commands that

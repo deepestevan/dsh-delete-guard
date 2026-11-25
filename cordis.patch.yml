@@ -14,3 +14,6 @@
         blockScriptDeletes: true
         blockTruncatingWrites: true
         uncRecoverableMove: true
+        # Omitted on purpose: the plugin defaults it to a dedicated directory under the
+        # system temp folder. Set it to put the share-delete staging area elsewhere.
+        # stagingRoot: 'D:\dsh-staging'

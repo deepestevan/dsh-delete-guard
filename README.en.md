@@ -47,10 +47,10 @@ slice endpoint that feeds a write.
 # from npm
 dsh plugin --profile web add dsh-delete-guard
 # or straight from the repository
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.4
 # or from a local tarball (when you have changed the source)
 pnpm pack --pack-destination ./temp/pack     # bump `version` first
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.2.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.4.tgz
 # restart dsh web: lib/*.js is loaded at process start
 ```
 
@@ -102,7 +102,8 @@ to `.bak` or writes a temp file it verifies, and a wipe-program **name mentioned
 ## Configuration
 
 Override in the profile's `cordis.patch.yml` (`config` is replaced as a whole
-block — restate every key you want to keep):
+block: an omitted key takes its default, and every default is `true`, so a key you set
+to `false` has to be restated to stay off):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -167,8 +168,8 @@ space** on the staging volume.
 | **Indirect writes inside a read-modify-write** (compilers, `npm run build`, `robocopy` over build output) | The write happens in a child process; the command text names no provable target |
 | Judging a truncation by size afterwards | Rolling back needs the old bytes, and `tools/post-execute` can only turn a result into feedback |
 | Moving something off a share (`Move-Item`, `robocopy /MOV`) | The content reaches the destination, but the share copy is unlinked for good and no bin record exists |
-| **A directory holding a name Windows cannot open** (trailing space or dot, usually left by WSL, an extractor or a sync client) | Win32 trims the trailing character when the name goes into a path, so the tree cannot be walked. The tool names the entry and the reason, and does **not** rename or delete it for you |
-| **A directory a process is using** (its working directory, or an open file inside) | The files inside can go one by one; the directory waits for the holder to let go. The tool says that is what happened and does **not** hunt for the process — that needs elevation or handle scanning, and a guessed PID is worse than none |
+| **A directory holding a name Windows cannot open** (trailing space or dot, usually left by WSL, an extractor or a sync client) | Win32 trims the trailing character when the name goes into a path, so the tree cannot be walked. The tool names the entry and the reason; renaming it so the name no longer ends with a space or dot makes the directory deletable |
+| **A directory a process is using** (its working directory, or an open file inside) | It can be deleted once that process exits. The tool says that is what happened, which is what you need to go and find the process; it does not look for it for you |
 
 Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
 `terminal_send`, `terminal_write`.
@@ -179,10 +180,11 @@ Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
 node test/run-all.mjs
 ```
 
-155 cases across ten layers: command classification (50), overwrite guard (30),
+211 cases across fourteen layers: command classification (50), overwrite guard (32),
 rule holes (12), share staging (8), `file_trash` operand guard (15), host schema +
 hook wiring (14), host schema acceptance (5), live end-to-end against the real
-Recycle Bin (14, including a real `\\localhost\C$` path), failure diagnosis (7).
+Recycle Bin (15, including a real `\\localhost\C$` path), failure diagnosis (7),
+cross-shell judgement (14), pre-filter consistency (4), escape shapes (27), argument shapes (8).
 `test/` is not shipped in the tarball, so it
 must be green before packing; two layers load the host's own validators and report
 **skipped** (not failed) where no DSH install exists. The overwrite-guard layer pins both
@@ -195,9 +197,9 @@ the same number of table rows.
 
 | File | Contents |
 | --- | --- |
-| [CHANGELOG.md](CHANGELOG.md) | Version summaries |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 | [SECURITY.md](SECURITY.md) | Threat model: a policy layer, not a sandbox |
-| [docs/incidents/](docs/incidents/) | Measured evidence behind each rule, with the verbatim command (not in the npm package) |
+| [docs/incidents/](docs/incidents/) | Measured evidence behind each rule, with the verbatim commands — in the GitHub repository |
 | [LICENSE](LICENSE) | MIT |
 
 
