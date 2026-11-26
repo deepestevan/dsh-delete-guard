@@ -19,8 +19,20 @@ refused: …`$idx` is offset by arithmetic in a slice endpoint, it is never chec
 
 ## The problem
 
-In DSH a model's `pwsh` delete erases files outright: `ctx.fs` has no delete,
-`ctx.shell` has only `execute()`, and nothing sits in between. One
+An agent deletes a file for an ordinary reason: it misremembered a path, mistyped one
+character, mixed up PowerShell and bash syntax, or did not realise what a Windows path
+referred to. The result can be irreversible — a workspace emptied, a whole disk formatted, a
+document being edited turned blank by a single write-back. That class of accident is what
+this plugin addresses, and its rules are not invented: most come from real deletions, quoted
+verbatim under `docs/archive/incidents/`; the rest come from reproducible shapes found in
+review.
+
+The goal is not to forbid deletion but to leave a way back from each one: what the Recycle
+Bin can hold goes there; what it cannot — permanent-erase tools, emptying the bin, disk-level
+operations, network locations with no bin — is refused, with the next step named.
+
+In DSH there is no layer for this today: a model's `pwsh` delete erases files outright —
+`ctx.fs` has no delete, `ctx.shell` has only `execute()`, and nothing sits in between. One
 `Remove-Item -Recurse -Force` takes a directory with it — no bin, no undo.
 
 This plugin hooks `tools/pre-execute` (the seam the host actually routes every

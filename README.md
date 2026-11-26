@@ -18,8 +18,16 @@ agent:  $lines=Get-Content $f; $idx=(…Select-String…).LineNumber; Set-Conten
 
 ## 解决什么问题
 
-DSH 里模型执行 `pwsh` 的删除命令，文件是被直接抹掉的：`ctx.fs` 没有 delete，
-`ctx.shell` 只有 `execute()`，没有任何中间层。一句 `Remove-Item -Recurse -Force`
+agent 删掉文件的原因通常很平常：记错路径、抄错一个字符、把 PowerShell 和 bash 的语法混在一起，
+或者没意识到某个 Windows 路径指的是什么。后果却可能不可逆——工作区被清空、整块盘被格式化、
+正在编辑的文档在一次写回后变成空白。这个插件针对的就是这一类事故，规则也不是凭想象列的：
+多数来自真实的删除记录（逐字写在 `docs/archive/incidents/`），其余来自审查中可复现的形态。
+
+目标不是禁止删除，而是让每一次删除都还有退路：能进回收站的进回收站；进不了回收站的
+（永久擦除工具、清空回收站、磁盘级操作、没有回收站的网络位置）直接拒绝，并给出下一步。
+
+在 DSH 里这件事没有现成的层：模型执行 `pwsh` 的删除命令，文件是被直接抹掉的——`ctx.fs`
+没有 delete，`ctx.shell` 只有 `execute()`，中间没有任何东西。一句 `Remove-Item -Recurse -Force`
 就能带走一整个目录，没有回收站，没有撤销。
 
 本插件挂在 `tools/pre-execute`（宿主路由每个工具调用的接缝），把这些调用拒绝，
