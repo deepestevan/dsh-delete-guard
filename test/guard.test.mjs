@@ -93,7 +93,6 @@ test('permanent-erase tooling is denied', () => {
 
 test('opaque constructs that hide targets are denied', () => {
   assertDeny('Remove-Item $(Get-Content list.txt)', 'opaque');
-  assertDeny('Remove-Item `whoami`.txt', 'opaque');
   assertDeny('Get-ChildItem C:\\tmp | Remove-Item', 'opaque');
   assertDeny('Remove-Item -Recurse C:\\tmp\\*', 'opaque');
   assertDeny('rm -rf --no-preserve-root /', 'opaque');
@@ -191,7 +190,6 @@ test('substituted delete targets are refused in both dialects', () => {
   // so it must never be treated as a literal path to recycle.
   const cases = [
     'rm -rf $(cat list.txt)',
-    'rm -f `cat list.txt`',
     'rm -rf $TARGET',
     'rm -rf ${TARGET_DIR}',
   ];
@@ -202,6 +200,10 @@ test('substituted delete targets are refused in both dialects', () => {
       assert.equal(v.kind, 'opaque', `${opts.dialect} kind for: ${cmd}`);
     }
   }
+  // A backtick pair is a substitution in bash and an escape in PowerShell, so the same
+  // text is one refusal and one rewrite. See the backtick test below.
+  assert.equal(classifyCommand('rm -f `cat list.txt`', BASH).action, 'deny');
+  assert.equal(classifyCommand('rm -f `cat list.txt`', PWSH).action, 'rewrite');
 });
 
 test('xargs-driven deletes are refused (target set unknowable)', () => {
@@ -216,11 +218,42 @@ test('xargs-driven deletes are refused (target set unknowable)', () => {
   }
 });
 
-test('backtick substitution stays denied in both dialects', () => {
-  // Backticks are command substitution in both shells.
-  for (const opts of [PWSH, BASH]) {
-    const v = classifyCommand('Remove-Item `whoami`.txt', opts);
-    assert.equal(v.action, 'deny', `backticks must be denied for dialect ${opts.dialect}`);
+test('a backtick is an escape in PowerShell and a substitution in bash', () => {
+  // The same text means two different things, and both answers have to be right.
+  //
+  // In PowerShell a backtick before an ordinary character just escapes it: `backup`.txt`
+  // names `backup.txt`, so the target is a plain literal and the delete is redirected like
+  // any other. Refusing it as "command substitution" named a mechanism the shell does not
+  // use there. In bash the pair really is substitution, so the target set is unknowable.
+  // Measured 2026-11-26.
+  const pwsh = classifyCommand('Remove-Item `whoami`.txt', PWSH);
+  assert.equal(pwsh.action, 'rewrite');
+  assert.deepEqual(pwsh.targets, ['whoami.txt']);
+
+  const bash = classifyCommand('Remove-Item `backup`.txt', BASH);
+  assert.equal(bash.action, 'deny');
+  assert.match(bash.reason, /command substitution/i, 'the bash reason must name the substitution');
+
+  // A backtick before a *special* character is not recoverable: it produces a control
+  // character or breaks the quoting, so the name the shell acts on cannot be written down.
+  const control = classifyCommand('Remove-Item "backup`n.txt"', PWSH);
+  assert.equal(control.action, 'deny');
+  assert.equal(control.kind, 'opaque');
+
+  // The same escape appears in *command names*, where it hid the program from every table:
+  // `Clear-Recy`cleBin` emptied the bin and `s`delete` erased files while the plain
+  // spellings were refused (measured 2026-11-26). A delete verb is recognised and
+  // redirected like any other; the irreversible ones are refused.
+  const renamed = classifyCommand('R`emove-I`tem x.txt', PWSH);
+  assert.equal(renamed.action, 'rewrite');
+  assert.deepEqual(renamed.targets, ['x.txt']);
+  for (const [cmd, kind] of [
+    ['s`delete -p 3 C:\\secret.txt', 'wipe'],
+    ['Clear-Recy`cleBin -Force', 'empty-recycle'],
+  ]) {
+    const verdict = classifyCommand(cmd, PWSH);
+    assert.equal(verdict.action, 'deny', `escaped command name must be denied: ${cmd}`);
+    assert.equal(verdict.kind, kind, `kind for: ${cmd}`);
   }
 });
 

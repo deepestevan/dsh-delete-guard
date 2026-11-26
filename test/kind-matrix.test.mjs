@@ -89,6 +89,57 @@ const CASES = [
   ['bash -c "rm -rf /tmp/x"'],
   ["node -e \"require('fs').rmSync('x', {recursive:true})\""],
   ['python -c "import shutil; shutil.rmtree(\'x\')"'],
+
+  // 2.4.5 rules that had no representative here, so nothing noticed that the hook's
+  // pre-filter did not match them: `git clean -fd` was refused by the classifier and
+  // executed by the host (measured 2026-11-26).
+  ['git clean -fd'],
+  ['git rm C:\\tmp\\a.txt'],
+  ['git reset --hard'],
+  ['git checkout -- f.txt'],
+  ['git restore f.txt'],
+  ['diskpart clean'],
+  ['Clear-Content .\\notes.md'],
+  ['s`delete -p 3 C:\\secret.txt'],
+  ['sed -i "/x/d" f.txt', 'bash'],
+  ['$l=Get-Content f; $i=(Get-Item g).Length; Set-Content f $l[0..($i-1)]'],
+  ['Remove-Item C:\\tmp\\*.log'],
+];
+
+/**
+ * One representative per **rule family**.
+ *
+ * The kinds list above proves that every *kind* still has a representative, and that was
+ * not enough: `git clean` is kind `delete`, so it rode on `Remove-Item`'s representative
+ * while its own rule never reached the hook. This list is keyed by rule, so a new rule of
+ * an existing kind cannot hide behind an older one. Each entry is `[family, command, tool?]`.
+ */
+const FAMILIES = [
+  ['delete-verb', 'Remove-Item C:\\tmp\\a.txt'],
+  ['delete-alias', 'del C:\\tmp\\a.txt'],
+  ['erase-api', "[System.IO.File]::Delete('C:\\tmp\\x.txt')"],
+  ['invoke-expression', 'Invoke-Expression "Remove-Item C:\\x\\a.txt"'],
+  ['robocopy', 'robocopy src dst /MIR'],
+  ['find-delete', 'find . -name "*.log" -delete', 'bash'],
+  ['inline-shell', 'bash -c "rm -rf /tmp/x"'],
+  ['inline-interpreter', "node -e \"require('fs').rmSync('x', {recursive:true})\""],
+  ['script-write', 'Set-Content x.ps1 "Remove-Item y"'],
+  ['wipe-program', 'sdelete -p 3 C:\\secret.txt'],
+  ['wipe-disk', 'diskpart clean'],
+  ['empty-recycle', 'Clear-RecycleBin -Force'],
+  ['empty-recycle-api', '[Microsoft.VisualBasic.FileIO.FileSystem]::SHEmptyRecycleBin()'],
+  ['in-place', 'Get-Content f | Set-Content f'],
+  ['slice', '$l=Get-Content f; $i=(Get-Item g).Length; Set-Content f $l[0..($i-1)]'],
+  ['empty-write', 'Clear-Content .\\notes.md'],
+  ['opaque-var', 'Remove-Item $var'],
+  ['glob', 'Remove-Item C:\\tmp\\*.log'],
+  ['cmd-switch', 'del /s /q C:\\tmp\\a.txt'],
+  ['git-clean', 'git clean -fd'],
+  ['git-rm', 'git rm C:\\tmp\\a.txt'],
+  ['git-discard', 'git reset --hard'],
+  ['escaped-name', 's`delete -p 3 C:\\secret.txt'],
+  ['sed-in-place', 'sed -i "/x/d" f.txt', 'bash'],
+  ['dotnet-readwrite', '[System.IO.File]::WriteAllText($p, [System.IO.File]::ReadAllText($p))'],
 ];
 
 /** The tool each case is driven through: the dialect follows from it. */
@@ -156,27 +207,38 @@ test('every classifier kind is represented, so a kind cannot lose its coverage',
     const verdict = classifyCommand(TEXT_OF(entry), { dialect: DIALECT_OF(TOOL_OF(entry)) });
     if (verdict.action !== 'allow') kinds.add(verdict.kind);
   }
-  for (const expected of ['delete', 'erase-api', 'opaque', 'wipe', 'empty-recycle', 'in-place-rewrite', 'script']) {
+  for (const expected of [
+    'delete', 'erase-api', 'opaque', 'wipe', 'empty-recycle', 'in-place-rewrite', 'script',
+    'slice-risk', 'empty-write', 'git-discard', 'forbidden-target',
+  ]) {
     assert.ok(kinds.has(expected), `no representative produces kind "${expected}"`);
   }
 });
 
+test('every rule family reaches the host as a refusal', async () => {
+  // Keyed by rule, not by kind: `git clean` is kind `delete`, and that is exactly how it
+  // stayed invisible — the kind already had a representative, so the per-kind gate passed
+  // while the hook returned `next()` for `git clean -fd` and the host ran it.
+  const hidden = [];
+  for (const [family, text, tool] of FAMILIES) {
+    const entry = [text, tool];
+    const verdict = classifyCommand(text, { dialect: DIALECT_OF(TOOL_OF(entry)) });
+    assert.notEqual(verdict.action, 'allow', `family "${family}" must be a refusal to test anything: ${text}`);
+    const hooked = await viaHook(entry);
+    if (hooked === 'PASS') hidden.push(`${family}: ${text}`);
+  }
+  assert.deepEqual(hidden, [], `the hook let these rule families through:\n${hidden.join('\n')}`);
+});
+
 test('the hook verdict is the classifier verdict, not merely "not pass"', async () => {
   // Passing the gate is not enough: the two paths must agree on *which* refusal, so a
-  // gate that happened to admit a command into the wrong rule would still show up.
-  const CODE_FOR = {
-    delete: 'DELETE_GUARD_REWRITE',
-    'in-place-rewrite': 'DELETE_GUARD_IN-PLACE-REWRITE',
-    wipe: 'DELETE_GUARD_WIPE',
-    'empty-recycle': 'DELETE_GUARD_EMPTY-RECYCLE',
-    opaque: 'DELETE_GUARD_OPAQUE',
-    'erase-api': 'DELETE_GUARD_ERASE-API',
-    script: 'DELETE_GUARD_SCRIPT',
-  };
+  // gate that happened to admit a command into the wrong rule would still show up. A
+  // rewrite becomes the redirect code; everything else carries its own kind.
   for (const entry of CASES) {
     const verdict = classifyCommand(TEXT_OF(entry), { dialect: DIALECT_OF(TOOL_OF(entry)) });
-    const expected = CODE_FOR[verdict.kind];
-    assert.ok(expected !== undefined, `no expected hook code for kind "${verdict.kind}"`);
+    const expected = verdict.action === 'rewrite'
+      ? 'DELETE_GUARD_REWRITE'
+      : `DELETE_GUARD_${verdict.kind.toUpperCase()}`;
     assert.equal(await viaHook(entry), expected, `hook code differs for: ${TEXT_OF(entry)}`);
   }
 });

@@ -15,9 +15,14 @@ command line.
 - An agent deleting files the user still needs — the ordinary failure mode. Every
   recognised delete is refused and redirected to `file_trash`
   (`SHFileOperationW(FOF_ALLOWUNDO)`), so the item is recoverable from Explorer.
-- Volumes whose file system has no bin at all (exFAT/FAT32): refused before the
-  shell is called, because `SHFileOperationW` erases there and still reports
-  success.
+  A recycle is reported only after this call's `$I` record for the path appears in the
+  bin on that volume; a path that vanished without one is reported as an erasure, because
+  "the path is gone" is also what a permanent delete looks like.
+- Volumes whose file system has no bin at all (exFAT/FAT32), UNC shares, and **mapped
+  network drives**: refused before the shell is called, because `SHFileOperationW` erases
+  there and still reports success. A mapped drive is judged by `DriveType`, not by whether
+  its spelling starts with two backslashes — its remote file system can report NTFS while
+  the local bin has no record for it.
 - **Deletion on a share, which has no bin.** `file_trash` copies the item to a
   local NTFS volume, verifies the copy (entry set, kinds, sizes), recycles the
   staging folder, and only then removes the original. The guarantee is about
@@ -25,21 +30,26 @@ command line.
   in the local bin and the item at the share path is gone, because there is no bin
   on that volume to hold it. The step order is the safety property — any failure
   before the last step leaves the original untouched, and the last step runs only
-  after the bridge confirms the staged copy is in the bin. A share root, a tree
+  after the bridge has found the staged copy's record in the bin. A share root, a tree
   containing a reparse point, and a staging volume without room are all refused
   before any copy.
-- Irreversible side doors: permanent-erase programs, erases performed through
-  .NET APIs, `Invoke-Expression`, deletes delegated to `cmd.exe`, and every
-  spelling of emptying the Recycle Bin.
+- Irreversible side doors: permanent-erase programs (including `diskpart clean`),
+  erases performed through .NET APIs, `Invoke-Expression`, deletes delegated to
+  `cmd.exe`, and every spelling of emptying the Recycle Bin.
 - **Content destroyed without a delete verb**: a command that reads a file and
   overwrites that same file (`Get-Content f … | Set-Content f`, `sed -i f`,
-  `cat f > f`), and a command that slices with an unchecked `$null`-able endpoint
-  and then writes the result. Both are refused, and the refusal names the
-  copy-then-verify recipe that makes the write undoable. This is the one class
-  where routing to the bin cannot help: on a UNC share there is no bin
-  (`scripts/recycle-bin.ps1` refuses it), so prevention is the whole remedy.
-  Record:
-  [docs/incidents/2026-11-14-full-file-rewrite-truncation.md](docs/incidents/2026-11-14-full-file-rewrite-truncation.md).
+  `cat f > f`), a command that slices with an unchecked `$null`-able endpoint
+  and then writes the result, and a command that provably leaves a file **empty**
+  (`Clear-Content`, `Set-Content f ''`, `truncate -s 0 f`, a bare `>`). All are
+  refused, and the refusal names the copy-then-verify recipe that makes the write
+  undoable. This is the one class where routing to the bin cannot help: on a UNC share
+  there is no bin (`scripts/recycle-bin.ps1` refuses it), so prevention is the whole
+  remedy. Record:
+  [docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md](docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md).
+- **Working-tree content that git discards without a delete verb**: `git clean`,
+  `git rm`, `git reset --hard`, `git checkout -- <path>` and `git restore <path>` are
+  refused; `git clean -n`, `git checkout <branch>`, `git restore --staged` and
+  `git rm --cached` stay allowed.
 
 ## Out of scope (by design, and verified as limits)
 
@@ -58,9 +68,11 @@ a security read:
 - Deletes inside a script file whose body the guard never sees: it refuses the
   write and the inline forms it can see, not the executed body.
 - Overwrites that do not read the file first (`echo x > notes.md`,
-  `Invoke-WebRequest -OutFile`, `git checkout --`). Those are deliberate rewrites,
+  `Invoke-WebRequest -OutFile`). Those are deliberate rewrites,
   not read-modify-write: the new content does not depend on the old, and refusing
   them would mean refusing `write`/`edit` too. README 「不挡什么」 lists them.
+  A write that leaves the file **empty** is the exception and is refused: there is no
+  new content to preserve by allowing it.
 - Post-hoc rollback. There is no "compare the size afterwards and restore": the
   old bytes are needed *before* the write, `tools/post-execute` can only turn a
   result into feedback, and a per-call tree snapshot is O(workspace) and would
@@ -138,8 +150,8 @@ The rules from 2.3.0 / 2.4.0 each came from one incident. 2.4.2 came from a
 measurement: **62,131 shell commands that actually ran on this machine** (5,746 session
 logs), re-classified with the matcher as it stood. 1,580 would be refused; **432 of those
 were false positives (0.70% of every command ever run here)**. Records:
-`docs/incidents/2026-11-24-rule-false-positive-sweep.md` (evidence) and
-`docs/incidents/2026-11-24-fix-plan-2-4-2.md` (plan, including the direction that was
+`docs/archive/incidents/2026-11-24-rule-false-positive-sweep.md` (evidence) and
+`docs/archive/incidents/2026-11-24-fix-plan-2-4-2.md` (plan, including the direction that was
 rejected and why).
 
 Two things from that exercise are worth keeping in view when changing a rule:

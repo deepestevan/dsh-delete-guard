@@ -16,8 +16,12 @@
   The recycle operation uses SHFileOperationW with FOF_ALLOWUNDO, the same
   Win32 path Explorer uses, so the bin's $I/$R metadata is written correctly.
   A failed move is reported, never silently escalated to a permanent delete.
-  Paths whose volume has no bin at all (UNC shares, exFAT/FAT32 volumes) are
-  refused before the call: SHFileOperationW would erase them and return 0.
+  Paths whose volume has no bin at all (UNC shares, mapped network drives,
+  exFAT/FAT32 volumes) are refused before the call: SHFileOperationW would
+  erase them and return 0.
+  Success is reported only when this call's $I record for the path appears in
+  the bin on that volume. A path that vanished without a record is reported as
+  an erasure — "the path is gone" is what a permanent delete looks like too.
 #>
 
 Set-StrictMode -Version Latest
@@ -113,6 +117,15 @@ function Resolve-NormalizedPath {
         $text = $text.Substring(4)
     }
 
+    # `\\?\Volume{GUID}\…` and `\\?\GLOBALROOT\…` have no drive letter, so the text left
+    # after the prefix is *relative* — GetFullPath would resolve it against this plugin's
+    # working directory and recycle a different file that happens to share the name.
+    # The Node side refuses these before the bridge is called; refusing again here keeps
+    # one entry point from becoming the weak one.
+    if ($text -match '^(?:Volume\{|GLOBALROOT)') {
+        throw "unsupported device path: $Path. Pass the ordinary path (C:\…) instead."
+    }
+
     $expanded = [Environment]::ExpandEnvironmentVariables($text)
     $full = [System.IO.Path]::GetFullPath($expanded)
     # GetFullPath keeps a trailing separator on directories; SHFileOperationW
@@ -188,8 +201,24 @@ function Test-RecyclableVolume {
         return 'A network location has no Recycle Bin, so recycling here would erase the item permanently. Copy it to a local NTFS path first, or delete it from Explorer where Windows can warn the user.'
     }
     $root = Get-DriveRoot -Path $Path
+    # A mapped drive (`S:` → `\\server\share`) is a network location spelled with a
+    # letter. Its remote file system can report NTFS while the local bin has no store for
+    # it, so the format test below passes and SHFileOperationW erases the item and returns
+    # 0 — measured 2026-11-26 on this machine: `S:` is DriveType=Network,
+    # DriveFormat=NTFS. Judge the drive type, not only the spelling.
+    $driveType = $null
     $format = ''
-    try { $format = ([System.IO.DriveInfo]::new($root)).DriveFormat } catch { $format = '' }
+    try {
+        $info = [System.IO.DriveInfo]::new($root)
+        $driveType = $info.DriveType
+        $format = $info.DriveFormat
+    } catch {
+        $driveType = $null
+        $format = ''
+    }
+    if ($driveType -eq [System.IO.DriveType]::Network) {
+        return 'That drive is a mapped network share, which has no Recycle Bin, so recycling here would erase the item permanently. Copy it to a local NTFS path first, or delete it from Explorer where Windows can warn the user.'
+    }
     if ($format -eq 'NTFS' -or $format -eq 'ReFS') { return $null }
     $shown = if ([string]::IsNullOrWhiteSpace($format)) { 'unknown' } else { $format }
     return "Volume $root has no Recycle Bin (file system: $shown), so recycling here would erase the item permanently. Move it to an NTFS volume first, or delete it from Explorer where Windows can warn the user."
@@ -346,6 +375,86 @@ function Get-FailureDiagnosis {
 }
 
 
+function Get-RecycleRecordTarget {
+    <#
+      The original path recorded inside one `$I` file.
+
+      Format since Vista: 8 bytes header, 8 bytes size, 8 bytes FILETIME, 4 bytes path
+      length in characters, then that many UTF-16LE characters. A path of 260 characters
+      or more is followed by a second length + name block; this reader reads the first
+      block only, and a path too long to fit simply yields no match — the caller then
+      reports the item as not provably recycled, which is the honest direction.
+
+      Returns the recorded path, or `$null` when the file cannot be read as a record.
+    #>
+    param([Parameter(Mandatory)][string] $RecordPath)
+    try { $bytes = [System.IO.File]::ReadAllBytes($RecordPath) } catch { return $null }
+    if ($bytes.Length -lt 28) { return $null }
+    $chars = [System.BitConverter]::ToInt32($bytes, 24)
+    if ($chars -le 0) { return $null }
+    $byteCount = [Math]::Min($chars * 2, $bytes.Length - 28)
+    if ($byteCount -le 0) { return $null }
+    $text = [System.Text.Encoding]::Unicode.GetString($bytes, 28, $byteCount)
+    return $text.TrimEnd([char]0)
+}
+
+function ConvertTo-ComparablePath {
+    # Paths in `$I` records come back with the spelling the shell used; compare on
+    # separators, case and a trailing separator only.
+    param([Parameter(Mandatory)][string] $Path)
+    return $Path.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+}
+
+function Find-RecycleRecord {
+    <#
+      The `$I` record that proves this path is in the bin, and what the search could see.
+
+      A record older than `$SinceUtc` is skipped: the same path may have been deleted and
+      restored before, and that record would otherwise be read as this call's.
+
+      This is the proof the previous success test lacked. `SHFileOperationW` with
+      FOF_ALLOWUNDO preserves undo information *"if possible"*; with FOF_NOCONFIRMATION and
+      FOF_SILENT it silently erases instead when the volume has no store for the item (a
+      bin disabled by policy, or an item larger than the volume's bin quota) and still
+      returns 0. "The path is gone" is exactly what a permanent delete looks like — the
+      record is not.
+
+      Returns `{ status, record }`: `found`, `missing` (the bin was readable and holds no
+      new record for this path) or `unreadable` (no folder could be listed, so the answer
+      is unknown — which is reported differently from "erased", because it is).
+    #>
+    param(
+        [Parameter(Mandatory)][string] $Root,
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][datetime] $SinceUtc
+    )
+    $bin = Join-Path $Root '$Recycle.Bin'
+    if (-not (Test-Path -LiteralPath $bin)) { return [pscustomobject]@{ status = 'unreadable'; record = $null } }
+    $wanted = ConvertTo-ComparablePath -Path $Path
+    try { $dirs = [System.IO.Directory]::GetDirectories($bin) } catch { $dirs = @() }
+    $foldersRead = 0
+    foreach ($dir in $dirs) {
+        # One folder per SID. Other users' folders (and SYSTEM's) are not readable, and
+        # that is not a failure: the record for this call is written under the caller's
+        # own SID. An unreadable folder is skipped, not fatal — letting it throw made the
+        # whole request answer with an error after the item had already been recycled.
+        try { $records = [System.IO.Directory]::GetFiles($dir, '$I*') } catch { continue }
+        $foldersRead += 1
+        foreach ($record in $records) {
+            try {
+                if ([System.IO.File]::GetLastWriteTimeUtc($record) -lt $SinceUtc) { continue }
+            } catch { continue }
+            $target = Get-RecycleRecordTarget -RecordPath $record
+            if ($null -eq $target -or $target.Length -eq 0) { continue }
+            if ((ConvertTo-ComparablePath -Path $target) -eq $wanted) {
+                return [pscustomobject]@{ status = 'found'; record = $record }
+            }
+        }
+    }
+    if ($foldersRead -eq 0) { return [pscustomobject]@{ status = 'unreadable'; record = $null } }
+    return [pscustomobject]@{ status = 'missing'; record = $null }
+}
+
 function Invoke-RecycleOne {
     <#
       Recycle a single path.
@@ -362,6 +471,12 @@ function Invoke-RecycleOne {
 
     $refusal = Test-RecyclableVolume -Path $Path
     if ($null -ne $refusal) { return $refusal }
+
+    $root = Get-DriveRoot -Path $Path
+    # Records written from here on belong to this operation. Two seconds of slack absorbs
+    # the file-time granularity of the volume; a fresh record for the same path from an
+    # earlier delete is older than that by definition.
+    $since = [datetime]::UtcNow.AddSeconds(-2)
 
     $op = New-Object SHFILEOPSTRUCTW
     $op.wFunc  = [RecycleBinNative]::FO_DELETE
@@ -384,6 +499,15 @@ function Invoke-RecycleOne {
     if ($op.fAnyOperationsAborted) { return 'The shell aborted the move to the Recycle Bin.' }
     # The call reports success for the whole request; confirm this path actually left.
     if (Test-Path -LiteralPath $Path) { return 'The path still exists after the recycle operation.' }
+    # …and that it left *into the bin*. A missing record means the shell erased it: report
+    # that as a failure, because "the path is gone" is what a permanent delete looks like too.
+    $proof = Find-RecycleRecord -Root $root -Path $Path -SinceUtc $since
+    if ($proof.status -eq 'missing') {
+        return 'The shell reported success and the path is gone, but no Recycle Bin record for it appeared on that volume, so the item was erased permanently rather than recycled. Restoring it is no longer possible; say so instead of reporting a recycle.'
+    }
+    if ($proof.status -eq 'unreadable') {
+        return 'The shell reported success and the path is gone, but the Recycle Bin records on that volume could not be read, so whether the item is recoverable is unknown. Do not report it as recycled; check the Recycle Bin for that drive.'
+    }
     return $null
 }
 

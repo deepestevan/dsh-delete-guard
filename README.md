@@ -41,10 +41,10 @@ DSH 里模型执行 `pwsh` 的删除命令，文件是被直接抹掉的：`ctx.
 # 从 npm 安装
 dsh plugin --profile web add dsh-delete-guard
 # 或直接从仓库安装（npm 不可用时）
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.4
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.5
 # 或者从本地 tarball（改过源码时用这条）
 pnpm pack --pack-destination ./temp/pack     # 先升 package.json 的 version
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.4.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.5.tgz
 # 重启 dsh web：lib/*.js 只在进程启动时加载
 ```
 
@@ -68,13 +68,17 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | 类别 | 例子 |
 | --- | --- |
 | 目标不可枚举（没法证明搬对东西） | `Remove-Item $(…)`、`… \| Remove-Item`、`xargs rm`、`Remove-Item @targets`、`-Recurse C:\tmp\*` |
+| **通配符目标** | `Remove-Item C:\tmp\*.log`、`del dist\*`：`file_trash` 不展开通配符，先把条目列出来，再给显式路径 |
 | 危险路径 | `C:\`、`\`、`C:\Windows`、`Program Files`、`..\..\`、Git Bash 的 `~` / `/tmp` |
 | 无删除动词的擦除 | `[System.IO.File]::Delete(…)`、`Invoke-Expression "…"`、`cmd /c del`、`robocopy /MIR`、`find -delete` |
-| 永久擦除工具 | `shred`、`sdelete`、`srm`、`cipher /w`、`format X:`（只按程序位置判定） |
+| **git 的工作区操作** | `git clean -fd`、`git rm`、`git reset --hard`、`git checkout -- <path>`、`git restore <path>`：都不是删除动词，工作区内容却就此消失 |
+| 永久擦除工具 | `shred`、`sdelete`、`srm`、`cipher /w`、`format X:`、`diskpart clean`（只按程序位置判定） |
+| **用反引号拼出的命令名** | ``s`delete``、``Clear-Recy`cleBin``、``R`emove-I`tem``：反引号在 PowerShell 里是转义，按真名判定 |
 | 清空回收站 | `Clear-RecycleBin`（含 `&`、子壳、`-EncodedCommand` 形态）、`SHEmptyRecycleBin`、对回收站条目驱动 shell 动词、直接删 `$Recycle.Bin` 内容 |
-| 没有回收站的位置 | UNC 共享、exFAT/FAT32 卷（在那里"回收"等于永久擦除） |
+| 没有回收站的位置 | UNC 共享、映射网络驱动器（`S:` → 共享）、exFAT/FAT32 卷（在那里"回收"等于永久擦除） |
 | 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.py` |
-| **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i $f`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本。先备份到 `.bak`，或写临时文件校验后再换上去的写法放行 |
+| **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本。`sed -i` 只放行有界的 `s///`，`d` 与整行模式仍拒。先**把原文件**复制到 `<name>.bak` / `.tmp` / `.new` 再写回的放行；把**新内容**写进临时文件再覆盖回原件的除外——那一步没有留下旧内容 |
+| **把文件写成空** | `Clear-Content $f`、`Set-Content $f ''`、`truncate -s 0 $f`、裸 `> $f`、`cp /dev/null $f`——旧内容没留副本；带新内容的一次性写不受影响 |
 | **未断言的切片端点** | 同一命令里既写文件、又用 `$idx ± n` 当区间端点（`$l[0..($idx-2)]`、`-First ($i-1)`），而 `$idx` 从没检查过 `$null`。`$null` 在 PowerShell 里不报错：`0..($null-2)` 就是 `0..-2` = 首行 + 末两行 |
 | **读动词折进写语句里** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`：一行里既读、又截断、又写回 |
 | **经变量调用的 shell** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"`：程序名不是字面量，正文无法判定 |
@@ -90,7 +94,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | 工具 | 作用 |
 | --- | --- |
 | `file_trash { paths, reason? }` | 唯一允许的删除方式。本地条目移入回收站；共享条目先复制到本地卷、校验、回收副本，之后才删原件（见「网络共享」）。逐条报告成功与失败 |
-| `trash_status { drive? }` | 报告该卷回收站的项目数与占用，用于确认删除确实落进了回收站 |
+| `trash_status { drive? }` | 报告该卷回收站的项目数与占用，用于确认删除确实落进了回收站；读取失败时报错，不会报成 0 项 |
 
 ## 配置
 
@@ -105,6 +109,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | `forbidWipe` | `true` | 禁止 `shred` / `sdelete` / `srm` / `cipher /w` / `format` |
 | `blockScriptDeletes` | `true` | 禁止脚本文件与内联字符串里的删除 |
 | `blockTruncatingWrites` | `true` | 禁止「读改写同一文件」与「未断言的切片端点 + 写文件」 |
+| `blockEmptyWrites` | `true` | 禁止把文件写成空内容（`Clear-Content`、空值 `Set-Content`、`truncate -s 0`、裸重定向） |
 | `uncRecoverableMove` | `true` | 共享删除：先复制到本地 NTFS 卷 + 校验 + 回收副本，再删原件；`false` 则纯拒绝 |
 | `stagingRoot` | `%LOCALAPPDATA%\dsh-delete-guard\staging` | 共享删除的暂存目录（必须在有回收站的本地卷上） |
 
@@ -139,6 +144,9 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 以下情况在复制之前就被拒绝：共享根（`\\host\share`）与只有主机名的形态、树里含重解析点
 （junction／符号链接：复制要么把目标内容一起复制进来、要么需要权限重建链接）、暂存卷空间不足。
 
+映射网络驱动器（`S:` → `\\host\share`）同样没有回收站：盘符形态不是 UNC，但桥接按驱动器类型判定，
+直接拒绝，也不会把它当共享去暂存。要保留内容就先把条目复制到本地 NTFS 卷。
+
 `uncRecoverableMove: false` 时改为直接拒绝共享路径，不复制也不删除。
 
 ## 不挡什么
@@ -152,7 +160,7 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 | 终端里分两次发送才拼出的删除 | 每次 send 只看到这一次的文本 |
 | 非 Windows 平台 | 桥接是 `SHFileOperationW` |
 | 空余空间不足时的删除 | NTFS 同卷回收是 rename，不占新空间，没有可预检的东西 |
-| **没读过就覆盖**（`echo x > 既有文件.md`、`Invoke-WebRequest -OutFile $f`、`git checkout -- f`） | 新内容不依赖旧内容，不是读改写 |
+| **没读过就覆盖**（`echo x > 既有文件.md`、`Invoke-WebRequest -OutFile $f`） | 新内容不依赖旧内容，不是读改写。把文件写成**空**的另算：那类被拒绝 |
 | 读改写里的**间接**写（编译器、`npm run build`、`robocopy` 覆盖产物） | 写入发生在子进程内部，命令文本里没有可判定的目标 |
 | 写完之后按体积判断有没有被截断 | 回滚需要覆盖前的旧内容，而 `tools/post-execute` 只能把结果改成反馈 |
 | 把共享上的东西 `Move-Item` / `robocopy /MOV` 到本地 | 内容到了目标位置，但共享上的原件被永久删除，没有回收站记录 |
@@ -168,9 +176,9 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 node test/run-all.mjs
 ```
 
-211 项、十四层：命令分类（50）、覆盖守卫（32）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（15）、
+233 项、十四层：命令分类（50）、覆盖守卫（43）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（20）、
 宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（15，含真 `\\localhost\C$` 路径）、
-失败诊断（7）、跨 shell 判定（14）、快筛一致性（4）、逃逸形态（27）、参数形状（8）。
+失败诊断（7）、跨 shell 判定（14）、快筛一致性（5）、逃逸形态（32）、参数形状（8）。
 `test/` 不进 tarball，所以打包前必须全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
 另有一层文档检查（`scripts/verify-readme-structure.mjs`）：三份 README 的章节数与表格行数必须一致。
 
@@ -180,7 +188,7 @@ node test/run-all.mjs
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么 |
 | [SECURITY.md](SECURITY.md) | 威胁模型：策略层，不是沙箱 |
-| [docs/incidents/](docs/incidents/) | 规则的实测依据与逐字命令，见 GitHub 仓库 |
+| [docs/archive/incidents/](docs/archive/incidents/) | 规则的实测依据与逐字命令，见 GitHub 仓库 |
 | [LICENSE](LICENSE) | MIT |
 
 ## 许可

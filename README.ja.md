@@ -44,10 +44,10 @@ Git Bash の `/c/...` パス、ごみ箱を空にするあらゆる書き方に�
 # npm から導入
 dsh plugin --profile web add dsh-delete-guard
 # またはリポジトリから直接
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.4
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.5
 # またはローカルの tarball から（ソースを変更したとき）
 pnpm pack --pack-destination ./temp/pack     # 先に package.json の version を上げる
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.4.tgz
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.5.tgz
 # dsh web を再起動（lib/*.js はプロセス起動時に読み込まれる）
 ```
 
@@ -70,13 +70,17 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | 区分 | 例 |
 | --- | --- |
 | 対象を証明できない | `Remove-Item $(…)`、`… \| Remove-Item`、`xargs rm`、`Remove-Item @targets`、`-Recurse C:\tmp\*` |
+| **ワイルドカード指定** | `Remove-Item C:\tmp\*.log`、`del dist\*`：`file_trash` はワイルドカードを展開しません。項目を列挙してから明示パスを渡してください |
 | 危険なパス | `C:\`、`\`、`C:\Windows`、`Program Files`、`..\..\`、Git Bash の `~` と `/tmp` |
 | 削除動詞を伴わない消去 | `[System.IO.File]::Delete(…)`、`Invoke-Expression "…"`、`cmd /c del`、`robocopy /MIR`、`find -delete` |
-| 完全消去ツール | `shred`、`sdelete`、`srm`、`cipher /w`、`format X:`（プログラム位置のみで判定） |
+| **git の作業ツリー操作** | `git clean -fd`、`git rm`、`git reset --hard`、`git checkout -- <path>`、`git restore <path>`：どれも削除動詞を持ちませんが、内容は失われます |
+| 完全消去ツール | `shred`、`sdelete`、`srm`、`cipher /w`、`format X:`、`diskpart clean`（プログラム位置のみで判定） |
+| **バッククォートで綴ったコマンド名** | ``s`delete``、``Clear-Recy`cleBin``、``R`emove-I`tem``：PowerShell のバッククォートはエスケープなので、実際の名前で判定します |
 | ごみ箱の空化 | `Clear-RecycleBin`（素の形・`&`・子シェル・`-EncodedCommand`）、`SHEmptyRecycleBin`、ごみ箱項目のシェル動詞、`$Recycle.Bin` 配下の直接削除 |
-| ごみ箱が無い場所 | UNC 共有と exFAT/FAT32 ボリューム（そこで「ごみ箱へ」は完全消去と同じ） |
+| ごみ箱が無い場所 | UNC 共有、マップされたネットワークドライブ（`S:` → 共有）、exFAT/FAT32 ボリューム（そこで「ごみ箱へ」は完全消去と同じ） |
 | スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.py` への書き込み |
-| **同一ファイルの読み書き** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`sed -i f`、`cat f > f`、`::ReadAllText` → `::WriteAllText`——新しい内容は唯一のコピーから作られるため、切り出しやフィルタを誤ると復元元が残りません。`.bak` か検証付き一時ファイルを残す書き方は許可 |
+| **同一ファイルの読み書き** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`cat f > f`、`::ReadAllText` → `::WriteAllText`——新しい内容は唯一のコピーから作られます。`sed -i` は有界な `s///` のみ許可し、`d` と行全体のパターンは拒否。**元ファイル**を `<name>.bak` / `.tmp` / `.new` に先にコピーする書き方は許可 |
+| **ファイルを空にする** | `Clear-Content $f`、`Set-Content $f ''`、`truncate -s 0 $f`、裸の `> $f`、`cp /dev/null $f`——古い内容の控えが残りません。新しい内容を持つ一括書き込みは対象外 |
 | **書き込み文に折り込まれた読み取り** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`——1 行で読み・切り詰め・書き戻し |
 | **変数経由のシェル呼び出し** | `$shellPath='…bash.exe'; & $shellPath -c "rm -rf …"`——プログラム名がリテラルでなく、本体を判定できない |
 | **未検査のスライス端点** | 同一コマンド内でファイルを書き、かつ `$idx ± n` を端点に使う（`$l[0..($idx-2)]`、`-First ($i-1)`）。`$idx` は `$null` 検査済みでない。PowerShell はエラーにせず、`0..($null-2)` は `0..-2`（先頭行 + 末尾 2 行）になる |
@@ -84,7 +88,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 **許可される**：読み取り専用の作業、削除語に言及するだけのコマンド
 （`Select-String -Pattern "Remove-Item"`、`Get-Content shred.exe`）、ごみ箱から
 の**復元**、`Add-Content` / `>>` / `-Append`（追記は置き換えない）、`$null` / `/dev/null`
-への書き込み、そして**`.bak` か検証付き一時ファイルを先に作る**全面書き換え
+への書き込み、そして**元ファイルを `<name>.bak` / `.tmp` / `.new` に先にコピーしてから**書き戻す全面書き換え
 また `node -e` / `python -c` の本体で消去ツール名に
 **言及**しただけのテキストはプログラム名として扱いません——`exec` / `execSync` / `spawn` /
 `system` / `subprocess.*` に渡されたときだけです（`bash -c` の本体はシェルテキストなので
@@ -95,7 +99,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | ツール | 役割 |
 | --- | --- |
 | `file_trash { paths, reason? }` | 唯一許可された削除手段。ローカルの項目はごみ箱へ移動し、共有の項目はローカルへ複製 → 検証 → 複製をごみ箱へ → その後に元を削除（「ネットワーク共有」参照）。パスごとに結果を報告 |
-| `trash_status { drive? }` | そのボリュームのごみ箱の項目数とバイト数。削除が本当に入ったかの確認に使う |
+| `trash_status { drive? }` | そのボリュームのごみ箱の項目数とバイト数。削除が本当に入ったかの確認に使う。読み取りに失敗したときは「0 項目」ではなくエラーとして報告します |
 
 ## 設定
 
@@ -110,6 +114,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | `forbidWipe` | `true` | `shred` / `sdelete` / `srm` / `cipher /w` / `format` を拒否 |
 | `blockScriptDeletes` | `true` | スクリプトファイルとインライン文字列内の削除を拒否 |
 | `blockTruncatingWrites` | `true` | 同一ファイルの読み書きと、書き込みを伴う未検査スライス端点を拒否 |
+| `blockEmptyWrites` | `true` | ファイルを空にする書き込み（`Clear-Content`、空値の `Set-Content`、`truncate -s 0`、裸のリダイレクト）を拒否 |
 | `uncRecoverableMove` | `true` | 共有の削除：ローカル NTFS へ複製 → 検証 → 複製をごみ箱へ → その後に元を削除。`false` で拒否のみ |
 | `stagingRoot` | `%LOCALAPPDATA%\dsh-delete-guard\staging` | 共有削除のステージング先（ごみ箱のあるローカルボリューム） |
 
@@ -142,6 +147,10 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 複製前に拒否するもの：共有ルート（`\\host\share`）やホスト名のみの形、**リパースポイント**
 （ジャンクション／シンボリックリンク）を含むツリー、ステージング先の**空き容量不足**。
 
+マップされたネットワークドライブ（`S:` → `\\host\share`）にもごみ箱はありません。ドライブ文字の形は
+UNC ではありませんが、ブリッジはドライブ種別で判定してそのまま拒否し、共有としてステージングしません。
+内容を残すには、先にローカル NTFS ボリュームへ複製してください。
+
 `uncRecoverableMove: false` にすると共有パスはそのまま拒否され、複製も削除も行いません。
 
 ## 何を守らないか
@@ -155,7 +164,7 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 | ターミナル送信 2 回に分けて組み立てた削除 | 1 回の送信のテキストしか見ていない |
 | Windows 以外 | ブリッジが `SHFileOperationW` |
 | 空き容量の枯渇 | 同一 NTFS ボリューム内のごみ箱移動は rename で、新しい容量を使わない |
-| **読まずに上書き**（`echo x > 既存.md`、`Invoke-WebRequest -OutFile`、`git checkout -- f`） | 意図的な書き換えであり読み書きではない。新しい内容は古い内容に依存せず、`write`/`edit` も同じことをする。すべての書き込み動詞を削除扱いにすると本プラグインが退けた過剰な規則になる |
+| **読まずに上書き**（`echo x > 既存.md`、`Invoke-WebRequest -OutFile`） | 意図的な書き換えであり読み書きではない。新しい内容は古い内容に依存しない。ファイルを**空にする**場合は別で、そちらは拒否します |
 | 読み書きの中の**間接的な書き込み**（コンパイラ、`npm run build`、`robocopy` の成果物） | 書き込みは子プロセス内で起き、コマンドテキストに証明できる対象が無い |
 | 書き込み後のサイズ比較・ロールバック | 戻すには書き込み前のバイト列が必要で、結局は対象の列挙問題に戻る。`tools/post-execute` は結果をフィードバックに変えるだけで、切り詰めを巻き戻せない。毎回ツリーをスナップショットするのは O(ワークスペース) で、しかも UNC 上の対象は含まれない |
 | 共有上のものを `Move-Item` / `robocopy /MOV` で移動 | 内容は移動先に残るが、共有側は完全に unlink され、ごみ箱の記録も残らない |
@@ -171,10 +180,10 @@ UNC パスにごみ箱はありません。`SHFileOperationW` はそこで**消�
 node test/run-all.mjs
 ```
 
-14 層・211 ケース：コマンド分類（50）、上書きガード（32）、規則の穴（12）、共有ステージング（8）、
-`file_trash` オペランドガード（15）、ホストのスキーマとフック配線（14）、ホストのスキーマ受理（5）、
+14 層・233 ケース：コマンド分類（50）、上書きガード（43）、規則の穴（12）、共有ステージング（8）、
+`file_trash` オペランドガード（20）、ホストのスキーマとフック配線（14）、ホストのスキーマ受理（5）、
 実ごみ箱に対するエンドツーエンド（15、実 `\\localhost\C$` パスを含む）、失敗診断（7）、
-シェル横断の判定（14）、事前フィルタの一貫性（4）、回避形態（27）、引数の形状（8）。`test/` は tarball に
+シェル横断の判定（14）、事前フィルタの一貫性（5）、回避形態（32）、引数の形状（8）。`test/` は tarball に
 含まれないので、パック前に緑である必要があります。うち 2 層はホスト自身の検証器を読み込むため、
 DSH のインストールが無い環境では失敗ではなく**スキップ**として報告されます。
 さらにドキュメント用の層（`scripts/verify-readme-structure.mjs`）があり、3 つの README の
@@ -186,7 +195,7 @@ DSH のインストールが無い環境では失敗ではなく**スキップ**
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | 各バージョンの変更点 |
 | [SECURITY.md](SECURITY.md) | 脅威モデル：サンドボックスではなくポリシー層 |
-| [docs/incidents/](docs/incidents/) | 各規則の根拠となる実測と逐語コマンド（GitHub リポジトリ内） |
+| [docs/archive/incidents/](docs/archive/incidents/) | 各規則の根拠となる実測と逐語コマンド（GitHub リポジトリ内） |
 | [LICENSE](LICENSE) | MIT |
 
 

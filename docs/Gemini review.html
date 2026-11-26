@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dsh-delete-guard 独立代码与架构审查报告</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Utilitarian · engineering code review · answer-first hero · architecture → friction hotspots → bypass surface → relaxation roadmap → sources · Inter + Noto Sans SC + JetBrains Mono · crisp white #FFFFFF + cobalt #1D4ED8 / #1E3A8A · 0px radius · inline metric strip · open tables · SVG pipeline & friction-vs-risk chart */
+:root {
+  --paper: #FFFFFF;
+  --band: #F4F6F8;
+  --ink: #0F172A;
+  --ink2: #1E293B;
+  --mute: #475569;
+  --hair: #CBD5E1;
+  --accent: #1D4ED8;
+  --accent-text: #1E3A8A;
+  --accent-2: #B45309;
+  --accent-2-text: #78350F;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.68;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  padding: 68px clamp(24px, 10.4vw, 112px) 92px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.page {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+}
+
+.col-full {
+  grid-column: 1 / -1;
+}
+
+.col-main {
+  grid-column: 1 / 10;
+}
+
+.measure {
+  max-width: 68ch;
+}
+
+@media (max-width: 900px) {
+  .col-main, .split-left, .split-right {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+/* Hero */
+.hero {
+  grid-column: 1 / -1;
+  padding-bottom: 40px;
+  border-bottom: 2px solid var(--ink);
+}
+
+h1 {
+  margin: 0 0 18px;
+  font-size: clamp(32px, 4.2vw, 48px);
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  text-wrap: balance;
+  max-width: 24ch;
+}
+
+.deck {
+  margin: 0 0 36px;
+  font-size: 18px;
+  line-height: 1.58;
+  color: var(--ink2);
+  max-width: 66ch;
+}
+
+.verdict-lead {
+  margin: 0 0 36px;
+  padding-left: 20px;
+  border-left: 3px solid var(--accent);
+  font-size: 17px;
+  line-height: 1.65;
+  color: var(--ink);
+  max-width: 66ch;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--hair);
+}
+
+@media (max-width: 720px) {
+  .metric-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metric-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metric-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.1;
+  color: var(--accent-text);
+  white-space: nowrap;
+}
+
+.metric-desc {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--mute);
+}
+
+/* Sections */
+.sec {
+  grid-column: 1 / -1;
+  margin-top: 64px;
+}
+
+.sec-split {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+  row-gap: 20px;
+  padding-top: 28px;
+  border-top: 1px solid var(--hair);
+}
+
+.split-left {
+  grid-column: 1 / 5;
+}
+
+.split-right {
+  grid-column: 5 / 13;
+}
+
+h2 {
+  margin: 0 0 18px;
+  font-size: clamp(24px, 2.4vw, 30px);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  text-wrap: balance;
+}
+
+h3 {
+  margin: 28px 0 10px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+p {
+  margin: 0 0 16px;
+  color: var(--ink2);
+}
+
+code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.875em;
+  color: var(--accent-text);
+  background: #EFF6FF;
+  padding: 1px 5px;
+}
+
+a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: var(--ink);
+}
+
+/* Lists */
+ul, ol {
+  margin: 0 0 18px;
+  padding-left: 22px;
+  color: var(--ink2);
+}
+
+li {
+  margin-bottom: 10px;
+}
+
+li strong {
+  color: var(--ink);
+}
+
+/* Figures & Charts */
+figure {
+  margin: 32px 0 12px;
+  padding: 0;
+}
+
+.fig-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+figcaption {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mute);
+}
+
+svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Tables (open, no zebra stripes) */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 24px 0 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+th {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 10px 14px 10px 0;
+  border-bottom: 2px solid var(--ink);
+  white-space: nowrap;
+}
+
+td {
+  padding: 14px 14px 14px 0;
+  border-bottom: 1px solid var(--hair);
+  vertical-align: top;
+  color: var(--ink2);
+}
+
+td:first-child {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.num-cell {
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  color: var(--accent-text);
+}
+
+.warn-cell {
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  color: var(--accent-2-text);
+  font-weight: 600;
+}
+
+/* Full-bleed band (max 1) */
+.band {
+  grid-column: 1 / -1;
+  margin: 64px calc(-1 * clamp(24px, 10.4vw, 112px)) 0;
+  padding: 48px clamp(24px, 10.4vw, 112px);
+  background: var(--band);
+  border-top: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+}
+
+.band-inner {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+}
+
+.pull-quote {
+  margin: 24px 0 0;
+  padding-left: 20px;
+  border-left: 3px solid var(--accent-2);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--ink);
+  max-width: 44ch;
+}
+
+/* Sources */
+.sources-list {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--mute);
+  padding-left: 20px;
+}
+
+.sources-list li {
+  margin-bottom: 6px;
+}
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header class="hero">
+    <h1>核心回收站护栏扎实，但覆写与脚本守卫在常规开发流上收得过紧</h1>
+    <p class="deck">
+      针对 DeepSeek Harness 插件 <a href="https://github.com/deepestevan/dsh-delete-guard" target="_blank" rel="noopener noreferrer">dsh-delete-guard</a>（v2.4.4）的独立源码审查。覆盖 <code>lib/index.js</code>、<code>lib/guard.js</code>、<code>lib/rewrite-guard.js</code>、<code>lib/staging.js</code>、<code>lib/shell-text.js</code> 与 <code>scripts/recycle-bin.ps1</code>。
+    </p>
+    <p class="verdict-lead">
+      <strong>核心结论：</strong>你的直觉是准确的。插件把“强制文件删除走 Windows 回收站”这条底线守得非常稳，Win32 桥接与 UNC 暂存的工程完成度很高；但随着 <code>rewrite-guard.js</code> 与 <code>blockScriptDeletes</code> 不断加码，守卫已经从“拦截不可逆删除”越界到“静态审查常规代码编辑与测试脚本”，导致 Agent 在无破坏意图的日常工作中频繁撞墙。
+    </p>
+    <div class="metric-strip">
+      <div class="metric-item">
+        <span class="metric-num">2,536 行</span>
+        <span class="metric-desc"><code>guard.js</code>（1612 行）与 <code>rewrite-guard.js</code>（924 行）构成的纯文本正则/词法分类引擎</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-num">6 处</span>
+        <span class="metric-desc">对正常开发流摩擦最高的误杀热点（<code>sed -i</code>、测试脚本落盘、新建文件切片等）</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-num">14% / 78%</span>
+        <span class="metric-desc">据 <a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">SECURITY.md</a> 实证（58 会话 126 次拦截）：14% 改用 <code>file_trash</code>，78% 改写命令绕行</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="sec col-main">
+    <h2>Win32 回收站桥接与 UNC 暂存是插件最稳固的工程底座</h2>
+    <p class="measure">
+      从宿主接入方式看，插件没有采用脆弱的 <code>ctx.shell</code> monkey-patch，而是挂在 Cordis 宿主的 <code>tools/pre-execute</code> 瀑布流接缝上（<a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/index.js" target="_blank" rel="noopener noreferrer">lib/index.js</a>），并配合 <code>systemPrompt</code>（<code>order = 60</code>）提前校准模型先验。这种“硬拦截 + 软引导”的组合，是你在 126 次真实拦截中实现 0% 彻底停工的关键。
+    </p>
+    <p class="measure">
+      底层执行层 <a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/scripts/recycle-bin.ps1" target="_blank" rel="noopener noreferrer">scripts/recycle-bin.ps1</a> 体现了对 Windows 文件系统坑点的深入实战经验：用无 BOM UTF-8 直接读取原始 <code>stdin</code> 流避开中文系统 OEM 代码页乱码；剥离 <code>\\?\</code> 前缀避免 <code>SHFileOperationW</code> 报 <code>0x7C</code>；显式指定 <code>Pack = 8</code> 对齐 64 位结构；仅放行 <code>NTFS</code>/<code>ReFS</code>（防止 exFAT/FAT32 静默永久删除）；并逐条调用 <code>SHFileOperationW(FOF_ALLOWUNDO)</code> 以精确定位失败路径与尾随空格/点号（WSL 解压常见畸形文件名）诊断。
+    </p>
+    <p class="measure">
+      针对没有回收站的 UNC 网络共享，<a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/staging.js" target="_blank" rel="noopener noreferrer">lib/staging.js</a> 采用“先复制校验、再回收副本、最后删源”的顺序：拒绝内部符号链接/联接点（<code>EREPARSE</code>），校验本地卷剩余空间需满足 <code>bytes * 1.02 + 64 MiB</code>，并用 <code>compareTrees</code> 逐项核对相对路径与文件大小。虽然不保留 ACL/ADS（文档已诚实声明），但在策略层已做到安全闭环。
+    </p>
+
+    <figure>
+      <div class="fig-title">每次 Shell 调用需穿过五道串行静态检查才会放行或转交回收站</div>
+      <svg viewBox="0 0 700 280" width="100%" aria-label="dsh-delete-guard 拦截与路由流水线">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+          </marker>
+        </defs>
+        <!-- Row 1: Main Pipeline -->
+        <rect x="10" y="34" width="112" height="58" fill="#F8FAFC" stroke="#0F172A" stroke-width="1.5"/>
+        <text x="66" y="58" text-anchor="middle" font-size="13" font-weight="600" fill="#0F172A">Shell 工具调用</text>
+        <text x="66" y="77" text-anchor="middle" font-size="12" fill="#475569">pwsh / bash / 终端</text>
+
+        <line x1="122" y1="63" x2="152" y2="63" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+        <rect x="156" y="34" width="122" height="58" fill="#F8FAFC" stroke="#475569" stroke-width="1.5"/>
+        <text x="217" y="58" text-anchor="middle" font-size="13" font-weight="600" fill="#0F172A">MAY_TOUCH_FILES</text>
+        <text x="217" y="77" text-anchor="middle" font-size="12" fill="#475569">正则预过滤</text>
+
+        <line x1="278" y1="63" x2="308" y2="63" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+        <rect x="312" y="34" width="142" height="58" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+        <text x="383" y="58" text-anchor="middle" font-size="13" font-weight="600" fill="#1E3A8A">guard.js 分类</text>
+        <text x="383" y="77" text-anchor="middle" font-size="12" fill="#1E3A8A">删除 / 擦除 / 脚本</text>
+
+        <line x1="454" y1="63" x2="484" y2="63" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+        <rect x="488" y="34" width="198" height="58" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+        <text x="587" y="58" text-anchor="middle" font-size="13" font-weight="600" fill="#78350F">rewrite-guard.js</text>
+        <text x="587" y="77" text-anchor="middle" font-size="12" fill="#78350F">原地覆写 / 切片截断检查</text>
+
+        <!-- Downward branches -->
+        <line x1="383" y1="92" x2="383" y2="150" stroke="#1D4ED8" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <rect x="292" y="154" width="182" height="62" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="1.5"/>
+        <text x="383" y="179" text-anchor="middle" font-size="13" font-weight="600" fill="#1E3A8A">DENY 并重定向</text>
+        <text x="383" y="199" text-anchor="middle" font-size="12" fill="#1E3A8A">改调 file_trash（回收站/暂存）</text>
+
+        <line x1="587" y1="92" x2="587" y2="150" stroke="#B45309" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <rect x="496" y="154" width="188" height="62" fill="#FFFBEB" stroke="#B45309" stroke-width="1.5"/>
+        <text x="590" y="179" text-anchor="middle" font-size="13" font-weight="600" fill="#78350F">高摩擦误杀集中区</text>
+        <text x="590" y="199" text-anchor="middle" font-size="12" fill="#78350F">直接 DENY，无温和替代工具</text>
+
+        <line x1="217" y1="92" x2="217" y2="150" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <rect x="132" y="154" width="144" height="62" fill="#F8FAFC" stroke="#475569" stroke-width="1.5"/>
+        <text x="204" y="179" text-anchor="middle" font-size="13" font-weight="600" fill="#0F172A">未命中直接放行</text>
+        <text x="204" y="199" text-anchor="middle" font-size="12" fill="#475569">漏网：git clean -fdx</text>
+      </svg>
+      <figcaption>来源：基于 lib/index.js、lib/guard.js 与 lib/rewrite-guard.js 源码控制流梳理。</figcaption>
+    </figure>
+  </section>
+
+  <section class="sec col-full">
+    <h2>六大“收得太紧”的误杀热点正在拖慢 Agent 正常工作</h2>
+    <p class="measure">
+      仔细看 <a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">SECURITY.md</a> 的统计数据：126 次拦截中只有 14% 转向了 <code>file_trash</code>，高达 78% 是 Agent 被拒后“换一种写法继续做”。当一个旨在把“删除”导向回收站的守卫，频繁拦截本不打算删除文件的编辑、测试和临时目录清理操作时，这 78% 里的很大一部分其实是在消耗不必要的试错轮次与上下文。
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>误杀热点</th>
+            <th>源码位置与触发条件</th>
+            <th>对正常 Agent 工作流的影响</th>
+            <th>摩擦级别</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1. 无编码参数的 <code>sed -i</code> 原地替换</td>
+            <td><code>rewrite-guard.js</code>：<code>sedInPlaceTarget</code> 同时记为读写目标，豁免需同时满足 <code>hasBoundedSubstitution</code> 与 <code>hasPinnedEncoding</code>。</td>
+            <td>POSIX/Git Bash 下 <code>sed -i 's/a/b/g' file.txt</code> 几乎不写编码参数，常规文本替换直接被拒，迫使 Agent 写临时文件或改工具。</td>
+            <td class="warn-cell">高摩擦</td>
+          </tr>
+          <tr>
+            <td>2. 编写含清理逻辑的正常脚本/测试</td>
+            <td><code>guard.js</code>：<code>blockScriptDeletes</code> 拦截写入 <code>.ps1/.sh/.py/.js/.ts</code> 且正文含 <code>rm</code>、<code>fs.rmSync</code>、<code>shutil.rmtree</code> 等词的操作。</td>
+            <td>Agent 为项目编写正常的 <code>clean.js</code>、<code>teardown.sh</code> 或需要清理临时目录的单元测试时，连“把代码写进文件”都会被拒。</td>
+            <td class="warn-cell">极高摩擦</td>
+          </tr>
+          <tr>
+            <td>3. <code>slice-risk</code> 误伤新建文件写入</td>
+            <td><code>rewrite-guard.js</code>：只要命令有任意 <code>writtenTargets</code> 且出现未校验 <code>[$idx - 1]</code> / <code>-First ($n - 1)</code>，即判定 <code>slice-risk</code>。</td>
+            <td>即使输出目标是全新的报表或临时文件（不存在覆写原文件风险），只要变量非 <code>.Count</code> 直接来源或未用正则匹配到的空值断言，整条命令被拒。</td>
+            <td class="warn-cell">高摩擦</td>
+          </tr>
+          <tr>
+            <td>4. 循环体内先写后读失去豁免</td>
+            <td><code>rewrite-guard.js</code>：检测到 <code>for/foreach/ForEach-Object</code> 时 <code>hasRepetition = true</code>，直接跳过 <code>firstRead &gt; lastWrite</code> 豁免。</td>
+            <td>批量生成文件后立即回读校验的常规脚本被误判为“原地读写覆写”，无法利用写后验证豁免。</td>
+            <td class="num-cell">中摩擦</td>
+          </tr>
+          <tr>
+            <td>5. Git Bash <code>/tmp/...</code> 与通配符清理</td>
+            <td><code>guard.js</code>：<code>translatePosixPath</code> 直接拒绝 <code>/tmp/</code>、<code>~</code> 等非盘符路径；<code>OPAQUE_CONSTRUCTS</code> 拦截 <code>-Recurse C:\tmp\*</code>。</td>
+            <td>Agent 在 Git Bash 中创建临时目录测试并清理时被拒；清理 <code>dist\*</code> 或 <code>tmp\*</code> 需多轮先列举再逐个调 <code>file_trash</code>。</td>
+            <td class="warn-cell">高摩擦</td>
+          </tr>
+          <tr>
+            <td>6. 歧义终端双方言交叉拒绝</td>
+            <td><code>index.js</code>：<code>shell</code>、<code>terminal_send</code>、<code>terminal_write</code> 走 <code>classifyAcrossShells</code> 同时跑 <code>pwsh</code> 与 <code>bash</code> 判定。</td>
+            <td>若两种方言解析出的 <code>rewrite</code> 路径集合稍有差异，直接升级为 <code>opaque</code> 拒绝；且复合命令（如 <code>npm run build &amp;&amp; rm -rf dist</code>）必须拆成多轮。</td>
+            <td class="num-cell">中摩擦</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure>
+      <div class="fig-title">覆写守卫与脚本写入拦截制造了高开发摩擦，但对应的永久误删风险并不对等</div>
+      <svg viewBox="0 0 700 360" width="100%" aria-label="各拦截规则的开发摩擦与真实防灾收益对比">
+        <text x="195" y="24" font-size="13" font-weight="600" fill="#1E3A8A">开发流摩擦度（越高越影响正常干活）</text>
+        <text x="455" y="24" font-size="13" font-weight="600" fill="#475569">防永久误删收益</text>
+
+        <!-- Axis & Grid -->
+        <line x1="195" y1="38" x2="195" y2="320" stroke="#CBD5E1" stroke-width="1"/>
+        <line x1="320" y1="38" x2="320" y2="320" stroke="#E2E8F0" stroke-width="1"/>
+        <line x1="445" y1="38" x2="445" y2="320" stroke="#CBD5E1" stroke-width="1"/>
+        <line x1="570" y1="38" x2="570" y2="320" stroke="#E2E8F0" stroke-width="1"/>
+
+        <!-- Row 1 -->
+        <text x="185" y="66" text-anchor="end" font-size="13" fill="#0F172A">Remove-Item / rm 重定向</text>
+        <rect x="195" y="50" width="60" height="11" fill="#1D4ED8"/>
+        <text x="262" y="60" font-size="12" fill="#1E3A8A">低（有 file_trash 替代）</text>
+        <rect x="195" y="65" width="460" height="11" fill="#475569"/>
+        <text x="662" y="75" font-size="12" fill="#0F172A">极高</text>
+
+        <!-- Row 2 -->
+        <text x="185" y="120" text-anchor="end" font-size="13" fill="#0F172A">Clear-RecycleBin / Wipe</text>
+        <rect x="195" y="104" width="25" height="11" fill="#1D4ED8"/>
+        <text x="227" y="114" font-size="12" fill="#1E3A8A">极低</text>
+        <rect x="195" y="119" width="435" height="11" fill="#475569"/>
+        <text x="637" y="129" font-size="12" fill="#0F172A">极高</text>
+
+        <!-- Row 3 -->
+        <text x="185" y="174" text-anchor="end" font-size="13" fill="#0F172A">blockScriptDeletes 写脚本</text>
+        <rect x="195" y="158" width="425" height="11" fill="#B45309"/>
+        <text x="627" y="168" font-size="12" fill="#78350F">极高</text>
+        <rect x="195" y="173" width="150" height="11" fill="#94A3B8"/>
+        <text x="352" y="183" font-size="12" fill="#475569">中低（未执行仅落盘）</text>
+
+        <!-- Row 4 -->
+        <text x="185" y="228" text-anchor="end" font-size="13" fill="#0F172A">sed -i 无编码参数拦截</text>
+        <rect x="195" y="212" width="380" height="11" fill="#B45309"/>
+        <text x="582" y="222" font-size="12" fill="#78350F">高</text>
+        <rect x="195" y="227" width="110" height="11" fill="#94A3B8"/>
+        <text x="312" y="237" font-size="12" fill="#475569">低（有界替换）</text>
+
+        <!-- Row 5 -->
+        <text x="185" y="282" text-anchor="end" font-size="13" fill="#0F172A">slice-risk 写全新文件</text>
+        <rect x="195" y="266" width="335" height="11" fill="#B45309"/>
+        <text x="537" y="276" font-size="12" fill="#78350F">中高</text>
+        <rect x="195" y="281" width="60" height="11" fill="#94A3B8"/>
+        <text x="262" y="291" font-size="12" fill="#475569">极低（无原件可毁）</text>
+
+        <text x="195" y="344" font-size="12" fill="#475569">定性评估基于源码拦截条件与常见开发工作流对比；蓝色/琥珀色为摩擦度，灰蓝为防误删收益。</text>
+      </svg>
+      <figcaption>来源：结合 guard.js 与 rewrite-guard.js 规则条件进行的架构权衡评估。</figcaption>
+    </figure>
+  </section>
+
+  <aside class="band">
+    <div class="band-inner">
+      <div class="col-main">
+        <p class="pull-quote">
+          “在 <code>sed -i</code> 和单元测试脚本上严防死守，却让 <code>git clean -fdx</code> 直接从预过滤正则里滑过去，是当前安全边界最明显的不对称。”
+        </p>
+      </div>
+    </div>
+  </aside>
+
+  <section class="sec sec-split">
+    <div class="split-left">
+      <h2>词法正则护栏的边界与盲区</h2>
+    </div>
+    <div class="split-right">
+      <p class="measure">
+        <a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">CHANGELOG.md</a> 显示，仅 <code>2.4.4</code> 单个版本就封堵了 6 种绕过方式并移除了 5 类误报拒绝。这种“打补丁—修误报”的高频拉锯，本质上是把 <code>shell-text.js</code> 的词法切分与正则匹配当作完整 AST 解析器来使用的必然结果。
+      </p>
+      <ul>
+        <li><strong>高频真灾难盲区（<code>git clean</code>）</strong>：<code>lib/index.js</code> 的 <code>MAY_TOUCH_FILES</code> 预过滤根本不包含 <code>git</code> 子命令。社区里 Agent 清空未追踪工作区最常见的元凶之一就是 <code>git clean -fdx</code> 或 <code>git reset --hard</code>，当前守卫会直接放行。</li>
+        <li><strong>PowerShell 反引号与动态别名</strong>：<code>guard.js</code> 依赖字面命令词匹配 <code>PS_DELETE_VERBS</code>，但 PowerShell 允许在命令名中插入反引号转义（如 <code>R`emove-I`tem</code>）或通过 <code>New-Alias</code> 临时别名绕过（<code>SECURITY.md</code> 已坦承动态拼接超出范围，但反引号属于静态可规范化形态）。</li>
+        <li><strong><code>-WhatIf</code> 逻辑轻微冗余</strong>：<code>guard.js</code> 在 <code>classifyStatement</code> 中对 <code>-WhatIf</code> 已直接返回 <code>allow</code>，而 <code>index.js</code> 的 <code>rewrite</code> 分支又保留了 <code>isDryRun</code> 拒绝并返回 <code>DELETE_GUARD_DRY_RUN</code>——导致纯 <code>Remove-Item -WhatIf</code> 放行，但混合语句中若有一条触发 <code>rewrite</code> 反而连 dry-run 一起拒绝。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="sec col-full">
+    <h2>分层放松方案：守住“回收站底线”，把正常开发权还给 Agent</h2>
+    <p class="measure">
+      建议保留 <code>file_trash</code>、<code>trash_status</code>、<code>forbidEmptyRecycleBin</code>、<code>forbidWipe</code> 与 UNC 暂存的全部刚性护栏，只针对“非删除类编辑”和“明确安全域的清理”做精确松绑。
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>优先级</th>
+            <th>目标模块</th>
+            <th>具体调整建议</th>
+            <th>预期效果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num-cell">P0</td>
+            <td><code>rewrite-guard.js</code></td>
+            <td><code>sed -i 's/.../.../'</code> 在无整行删除（<code>d</code>）命令时直接放行，不再强制要求 <code>hasPinnedEncoding</code>；<code>hasCopyStepFor</code> 放宽对自定义备份目录/后缀（如 <code>.v1</code>、<code>backup/</code>）的识别。</td>
+            <td>消除 POSIX/Git Bash 下常规文本替换的反复撞墙，保留对无条件截断的拦截。</td>
+          </tr>
+          <tr>
+            <td class="num-cell">P0</td>
+            <td><code>rewrite-guard.js</code></td>
+            <td>将 <code>slice-risk</code> 的触发前提收窄为：写目标在命令中同时被读取（原地覆写），或通过轻量化检查确认目标文件已存在；写入全新输出文件时不再拦截切片。</td>
+            <td>避免正常数据处理与报表生成脚本因数组切片语法被误杀。</td>
+          </tr>
+          <tr>
+            <td class="num-cell">P0</td>
+            <td><code>guard.js</code></td>
+            <td>收窄 <code>blockScriptDeletes</code>：向工作区源码/测试文件（<code>.py</code>/<code>.js</code>/<code>.ts</code>）写入 <code>fs.rmSync</code> 或 <code>shutil.rmtree</code> 时放行，仅当同一条命令紧接着执行该脚本，或脚本写入系统/临时执行路径时拦截。</td>
+            <td>恢复 Agent 编写项目构建脚本与单元测试清理逻辑的能力。</td>
+          </tr>
+          <tr>
+            <td class="num-cell">P1</td>
+            <td><code>guard.js</code> / <code>index.js</code></td>
+            <td>在 <code>translatePosixPath</code> 中将 Git Bash 的 <code>/tmp/...</code> 映射到 Windows <code>$env:TEMP</code> 下的子路径并放行/重定向到 <code>file_trash</code>；对 <code>C:\tmp\*</code> 等明确临时目录下的浅层通配符尝试展开或引导，而非一律当 <code>opaque</code> 拒绝。</td>
+            <td>减少 Agent 在临时目录做实验与清理时的多轮试错。</td>
+          </tr>
+          <tr>
+            <td class="num-cell">P1</td>
+            <td><code>index.js</code> / <code>guard.js</code></td>
+            <td>在 <code>MAY_TOUCH_FILES</code> 中补入 <code>\bgit\s+(?:clean|reset)\b</code>，至少对 <code>git clean -fd</code> / <code>-fdx</code> 给出拦截或强提示（引导先 <code>git status</code> / 备份到回收站）。</td>
+            <td>补齐社区高频“清空未追踪工作区”盲区，提升真实防灾 ROI。</td>
+          </tr>
+          <tr>
+            <td class="num-cell">P2</td>
+            <td><code>guard.js</code></td>
+            <td>在 <code>commandWord</code> 阶段剥离 PowerShell 反引号转义；长期可考虑对超过 3 条语句的复杂 <code>pwsh</code> 脚本按需调用 <code>[System.Management.Automation.Language.Parser]::ParseInput</code> 替代继续堆砌正则。</td>
+            <td>终结“补丁—误报”循环，降低 1612 行正则引擎的长期维护成本。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec col-main">
+    <h2>Sources</h2>
+    <ol class="sources-list">
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard" target="_blank" rel="noopener noreferrer">deepestevan/dsh-delete-guard — Repository Overview &amp; README</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/index.js" target="_blank" rel="noopener noreferrer">lib/index.js — Cordis Plugin Entry, Pre-filter &amp; Tool Registration</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/guard.js" target="_blank" rel="noopener noreferrer">lib/guard.js — Command Classification, Delete Verbs &amp; Opaque Constructs</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/rewrite-guard.js" target="_blank" rel="noopener noreferrer">lib/rewrite-guard.js — In-place Overwrite &amp; Slice-risk Guard</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/staging.js" target="_blank" rel="noopener noreferrer">lib/staging.js — UNC Staging &amp; Tree Verification</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/lib/shell-text.js" target="_blank" rel="noopener noreferrer">lib/shell-text.js — Dialect-agnostic Lexical Splitting</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/scripts/recycle-bin.ps1" target="_blank" rel="noopener noreferrer">scripts/recycle-bin.ps1 — Win32 SHFileOperationW Bridge</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">SECURITY.md — Threat Model &amp; Empirical Session Metrics</a></li>
+      <li><a href="https://github.com/deepestevan/dsh-delete-guard/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">CHANGELOG.md — Release History through v2.4.4</a></li>
+    </ol>
+  </section>
+
+</main>
+</body>
+</html>

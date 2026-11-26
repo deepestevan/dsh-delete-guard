@@ -1,6 +1,6 @@
 {
   "name": "dsh-delete-guard",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "description": "Redirect shell deletions into the OS Recycle Bin. Intercepts known deletion forms at tools/pre-execute (pwsh, bash, cmd, the persistent terminal) and answers with a file_trash call that uses Win32 SHFileOperationW, so the content stays recoverable. Also catches content destroyed without a delete verb — an in-place rewrite of the only copy, an unchecked slice endpoint — and a named set of permanent-erase shapes: wipe programs, disk cmdlets, emptying the bin, and anything built at run time. UNC shares have no Recycle Bin, so a share deletion is staged to a local NTFS volume and verified before the original goes. The README lists what is not covered.",
   "type": "module",
   "main": "lib/index.js",

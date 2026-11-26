@@ -7,6 +7,69 @@ profile actually ran — local time, UTC+8.
 The detail behind an entry — what was measured, what was rejected, what a trade-off costs
 — sits in the code comments and under `docs/`. Neither ships in the npm package.
 
+## [2.4.5] — 2026-11-26
+
+**A pass over what this guard promises and what it refuses.** Five promises did not hold on
+the path the host actually runs, several deletes and destroyers had no rule, and several
+refusals were about text rather than commands. Every rule stays on by default;
+`blockEmptyWrites` is new and also defaults to on. Nothing needs reconfiguring.
+
+### Promises that did not hold
+
+| Shape | Was | Now |
+| --- | --- | --- |
+| `\\?\C:\Windows\System32\x.dll`, `\\?\C:\…\workspace` | every path check compared a different string from the one the Windows API call used, so the real path was recycled | the prefix is removed before the checks; `\\?\Volume{…}` and `\\.\` paths are refused with a reason |
+| A successful `file_trash` | reported when the API returned 0 and the path was gone — which is also what a permanent erase looks like | reported only when this call's Recycle Bin record for the path appears on that volume; otherwise the result says the item was erased |
+| `S:\notes.md`, where `S:` is a mapped share | treated as a local NTFS volume; the shell erased the item and returned 0 | refused before the call: the drive type is judged, not only its file-system name |
+| `git clean -fd` | refused by the classifier and executed by the host — the pre-filter did not match it | refused at the hook. The structural test now pins one representative per rule family, not one per refusal kind |
+| `sed -i f` | listed as covered; the pre-filter never matched it | judged: a bounded `s///` script passes, `d` and whole-line patterns are refused |
+
+### Deletes and destroyers that had no rule
+
+| Shape | Was | Now |
+| --- | --- | --- |
+| `git clean -fdx`, `git rm`, `git reset --hard`, `git checkout -- f`, `git restore f` | allowed — none of them names a delete verb | refused, each with the step that keeps the content (`git clean -n`, `git stash push`, a patch file) |
+| `diskpart clean`, `diskpart /s script.txt` | allowed, while `format D:` was refused | refused |
+| `Remove-Item C:\tmp\*.log`, `del dist\*` | redirected to `file_trash ["…\*.log"]`, which does not expand wildcards — a guaranteed failed round | refused, with the listing command that produces explicit paths |
+| `s`delete`, `sh`red`, `Clear-Recy`cleBin`, `R`emove-I`tem` | allowed — the program name was compared literally | recognised; a delete is redirected, the irreversible ones are refused |
+| `Clear-Content notes.md`, `Set-Content notes.md -Value ''`, `truncate -s 0 notes.md`, `> notes.md`, `cp /dev/null notes.md` | allowed — nothing is read, so neither content rule fired | refused (`blockEmptyWrites`); a write that carries new content is unchanged |
+| `del /s /q C:\tmp\a.txt` | the switches became operands, and the redirect named `S:\` and `Q:\` | the switches are skipped |
+| `node -e "require('child_process').execSync('Remove-Item x')"`, Python `os.system(<delete>)` | allowed — the string is handed to a shell | refused |
+| `@'…'@ \| iex` | allowed — a bare `iex` was read as having nothing to read | refused |
+| `python -c "open(p,'w').write(open(p).read())"` | allowed | refused |
+| `node -e "fs.readFileSync(p); fs.writeFileSync(p)"` | allowed — only the PowerShell spelling was known | refused |
+| `tr a-z A-Z < a.md > a.md` | allowed — the read side is a redirection, not a reader command | refused |
+
+### Refusals that were about text, not commands
+
+| Shape | Was | Now |
+| --- | --- | --- |
+| `Select-String -Pattern "format D:" notes.md`, `Get-Content f \| Select-String "cipher /w"` | refused as a wipe — the flag was matched anywhere in the line | allowed; `cipher /w E:` and `format D:` still refused |
+| `Copy-Item $f "$f.tmp"` then write the file back | refused, while the identical `"$f.bak"` was allowed | allowed; the copy must be of *that* file, so a backup of `b.md` no longer exempts a rewrite of `a.md` |
+| `bash -c "echo Remove-Item x"`, `pwsh -c "Write-Output 'Remove-Item x'"` | refused — the verb was found anywhere in the body | allowed; the body is split and judged by what each statement starts with |
+| A here-string quoting `& ([scriptblock]::Create(…))` | refused as a delete — documentation read as code | allowed; an unassigned here-string handed to an interpreter still refuses |
+| ``Remove-Item `Get-Date` ``, ``Remove-Item `whoami`.txt`` | refused as "backtick command substitution" | redirected like any other literal target; a backtick before a control character or a quote still refuses |
+| `sed -i 's/a/b/g' f` | refused for want of an `-Encoding` parameter `sed` does not have | allowed |
+| A bounded find-and-replace with `-Encoding utf8` on the read and `-Encoding ascii` on the write | allowed | refused: the two codecs must match |
+
+### What a refusal tells you
+
+- A bounded find-and-replace without an explicit encoding names the fix: add `-Encoding utf8`
+  to the read and to the write and it passes.
+- An unmapped POSIX path under bash names `cygpath -w` instead of saying "resolve it first".
+- A wildcard delete names the listing command that produces explicit paths.
+- The read-then-write refusal no longer claims which half came first. When both sit in one
+  statement the guard cannot see the order, and either order loses the file.
+
+### Refused on purpose
+
+A script that writes a file and then reads it back stays refused even when that particular
+script is harmless: `open(p,'w')` truncates immediately, so "write then read" and "read then
+write" both destroy the file and the two cannot be told apart inside one statement. Emptying
+a log is refused for the same reason: copy it first, or write the new content in one step.
+
+Tests 222 → 233.
+
 ## [2.4.4] — 2026-11-25
 
 **A hardening release.** Six ways past the guard were closed, five refusals that should not
@@ -147,8 +210,8 @@ built from one incident each. This release is built from **62,131 shell commands
 actually ran on this machine** (5,746 session logs), re-classified with today's matcher:
 1,580 would now be refused, and **432 of those were false positives (0.70% of all
 commands)**. Three independent audits — two per-command, one code-level — plus my own
-mechanical re-checks. Evidence: `docs/incidents/2026-11-24-rule-false-positive-sweep.md`,
-plan: `docs/incidents/2026-11-24-fix-plan-2-4-2.md`.
+mechanical re-checks. Evidence: `docs/archive/incidents/2026-11-24-rule-false-positive-sweep.md`,
+plan: `docs/archive/incidents/2026-11-24-fix-plan-2-4-2.md`.
 
 ### `in-place-rewrite`: two conditions instead of a new rule
 
@@ -371,7 +434,7 @@ There is no delete verb in that command, so every 2.2.3 rule was correctly silen
 `$lines[0..($null-2)]` as `$lines[0..-2]` — `$lines[0,-1,-2]`, the first line plus
 the last two. Measured on pwsh 7 with a 10-element array: `L1,L10,L9`. No error,
 no warning. Record and verbatim evidence:
-`docs/incidents/2026-11-14-full-file-rewrite-truncation.md`.
+`docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md`.
 
 New module `lib/rewrite-guard.js` (pure, no I/O), wired into `classifyCommand`
 after the erase/script rules and **before** the redirect collection — `file_trash`

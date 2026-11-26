@@ -116,8 +116,13 @@ test('every spelling of an in-place rewrite is refused', () => {
   for (const cmd of forms) assertDeny(cmd, 'in-place-rewrite');
 });
 
-test('in-place editors are refused unless they keep a copy', () => {
-  assertDeny("sed -i 's/a/b/' notes.md", 'in-place-rewrite', BASH);
+test('in-place editors are refused unless they keep a copy or stay bounded', () => {
+  // An unanchored, non-empty substitution pattern is the sed spelling of `edit`: it cannot
+  // drop a line or blank one. Everything that can (`d`, whole-line patterns) stays refused —
+  // see the sed test above — and `-i.bak` keeps the copy.
+  assertAllow("sed -i 's/a/b/' notes.md", BASH);
+  assertDeny("sed -i 's/^.*//' notes.md", 'in-place-rewrite', BASH);
+  assertDeny("sed -i '/a/,/b/d' notes.md", 'in-place-rewrite', BASH);
   assertAllow("sed -i.bak 's/a/b/' notes.md", BASH);
 });
 
@@ -160,12 +165,95 @@ test('creating, appending and discarding are not rewrites', () => {
     'Add-Content -LiteralPath log.txt -Value $entry',
     'echo hi >> log.txt',
     'Set-Content -LiteralPath log.txt -Value $entry -Append',
-    'Clear-Content -LiteralPath log.txt',
     'Get-ChildItem . -ErrorAction SilentlyContinue 2> $null',
     'Get-Content f.txt > /dev/null',
   ];
   for (const cmd of forms) assertAllow(cmd);
   assertAllow('find . -name "*.tmp" 2>/dev/null | head', BASH);
+});
+
+test('a backup only counts when it is a real copy of this file', () => {
+  // The destination marker used to be enough on its own, so a backup of some *other* file
+  // exempted the rewrite: `Copy-Item b.md b.md.bak; …; Set-Content a.md $t` was allowed,
+  // and so was writing the new content to `$env:TEMP` first (measured 2026-11-26, after
+  // 2.4.5 widened the marker to `.tmp`/`.new`).
+  assertDeny('Copy-Item b.md b.md.bak; $t=Get-Content a.md -Raw; Set-Content a.md $t', 'in-place-rewrite');
+  assertDeny('Copy-Item c.md c.md.tmp; $t=Get-Content a.md -Raw; Set-Content a.md $t', 'in-place-rewrite');
+  assertDeny(
+    '$o="$env:TEMP\\x.tmp"; $t=Get-Content a.md -Raw; Set-Content $o $t; Copy-Item $o a.md -Force',
+    'in-place-rewrite',
+  );
+  // A copy of the file itself, taken first, still passes — whatever it is named.
+  assertAllow('$t=Get-Content a.md -Raw; Copy-Item a.md a.md.bak; Set-Content a.md $t');
+  assertAllow('$t=Get-Content a.md -Raw; Copy-Item a.md a.md.tmp; Set-Content a.md $t');
+});
+
+test('the bounded exemption is for one file with one codec', () => {
+  // A substitution that belongs to one file used to exempt any other in-place rewrite in
+  // the same command, and the codec values were never compared.
+  assertDeny(
+    "$a=Get-Content a.md -Raw -Encoding utf8; $a=$a.Replace('x','y'); Set-Content a.md $a -Encoding utf8; "
+      + '$b=(Get-Content b.md).ToUpper(); Set-Content b.md $b',
+    'in-place-rewrite',
+  );
+  assertDeny(
+    "$t=Get-Content a.md -Raw -Encoding utf8; $t=$t.Replace('x','y'); Set-Content a.md $t -Encoding ascii",
+    'in-place-rewrite',
+  );
+  assertAllow("$t=Get-Content a.md -Raw -Encoding utf8; $t=$t.Replace('x','y'); Set-Content a.md $t -Encoding utf8");
+});
+
+test('a name rebound to another file is a read of one file and a write of another', () => {
+  // Taking the last assignment for both sides made the read of `a.md` look like a read of
+  // `b.md`, refusing a command that never rewrote anything in place (measured 2026-11-26).
+  assertAllow("$f='a.md'; Get-Content $f; $f='b.md'; Set-Content $f 'x'");
+});
+
+test('sed -i passes on a bounded script and is refused otherwise', () => {
+  // `sed` cannot take `-Encoding` and does not transcode, so the codec half of the
+  // exemption cannot apply to it. What matters is the script: a bounded substitution keeps
+  // every byte it does not match; `d` and whole-line patterns do not. The program is the
+  // same whichever tool carries the text, so this is judged in both dialects.
+  for (const opts of [BASH, PWSH]) {
+    assertAllow('sed -i "s/a/b/g" f.txt', opts);
+    assertAllow('sed -i "s/a/b/; s/c/d/" f.txt', opts);
+    assertAllow('sed -i.bak "s/a/b/g" f.txt', opts);
+    assertDeny('sed -i "/x/d" f.txt', 'in-place-rewrite', opts);
+    assertDeny('sed -i "1,$d" f.txt', 'in-place-rewrite', opts);
+    assertDeny('sed -i "s/.*//" f.txt', 'in-place-rewrite', opts);
+  }
+});
+
+test('a write that leaves the file empty is refused', () => {
+  // The third shape: the file survives and its content does not. None of the rules above
+  // fires on these — nothing is read and no slice endpoint is involved — so they were
+  // allowed while a read-modify-write was refused (measured 2026-11-26). The write *with*
+  // content stays allowed: refusing `echo x > f` would mean refusing `write`/`edit`.
+  for (const cmd of [
+    'Clear-Content -LiteralPath notes.md',
+    "Set-Content -LiteralPath notes.md -Value ''",
+    'Set-Content -LiteralPath notes.md -Value $null',
+    "Set-Content notes.md ''",
+    'Out-File notes.md -Value ""',
+    'truncate -s 0 notes.md',
+    ': > notes.md',
+    '> notes.md',
+    'cp /dev/null notes.md',
+  ]) {
+    assertDeny(cmd, 'empty-write');
+  }
+  for (const cmd of [
+    "Set-Content -LiteralPath notes.md -Value '# Title'",
+    'echo hi > notes.md',
+    'Add-Content -LiteralPath notes.md -Value ""',
+    'New-Item -ItemType File -Path notes.md',
+  ]) {
+    assertAllow(cmd);
+  }
+  // `blockEmptyWrites: false` is its own switch, independent of the truncating rules.
+  const off = classifyCommand('Clear-Content -LiteralPath notes.md', { ...PWSH, blockEmptyWrites: false });
+  assert.equal(off.action, 'allow');
+  assert.equal(classifyCommand('Get-Content f | Set-Content f', { ...PWSH, blockEmptyWrites: false }).action, 'deny');
 });
 
 test('a literal path on one side and a variable on the other still match', () => {
@@ -285,7 +373,6 @@ test('known gaps stay gaps (documented in README, not silently covered)', () => 
   // commit.
   const gaps = [
     "Invoke-WebRequest $u -OutFile $f",
-    'git checkout -- docs/notes.md',
   ];
   for (const cmd of gaps) assertAllow(cmd);
 });
@@ -332,11 +419,95 @@ test('order: a read that precedes the last write may have fed it', () => {
   assertDeny("'x' | Set-Content $f; $o = Get-Content $f; Set-Content $f $o", 'in-place-rewrite');
 });
 
+test('a copy counts whatever it is named', () => {
+  // The check asks whether the old content still exists, not what the suffix proves about
+  // intent. `Copy-Item $f "$f.bak"` was accepted while `"$f.tmp"` was refused — and the
+  // README told the caller to use a temp file. Measured 2026-11-25.
+  for (const suffix of ['.bak', '.tmp', '.new', '.orig', '.old']) {
+    assertAllow(`Copy-Item $f "$f${suffix}"; $t=Get-Content $f -Raw; Set-Content $f $t`);
+  }
+  // A copy of the target, taken before the write, is the only thing that qualifies. Writing
+  // the *new* content to a temp file and moving it over the original keeps no old bytes.
+  assertDeny(`$o="$env:TEMP\\x.tmp"; $t=Get-Content $f -Raw; Set-Content $o $t; Copy-Item $o $f -Force`, 'in-place-rewrite');
+  assertDeny('$t=Get-Content $f -Raw; Set-Content $f $t', 'in-place-rewrite');
+});
+
+test('a script that writes a file and reads it back is still refused', () => {
+  // Conservative, and knowingly so: `open(p,'w')` truncates immediately, so "write then read"
+  // and "read then write" both lose the file and the guard cannot tell them apart inside one
+  // statement. The refusal no longer claims an order it cannot see — it says the command
+  // reads and writes the same file, which is true either way.
+  const script = [
+    "$env:X='1'; & python -c @\"",
+    'open(r"C:\\\\T\\\\a.png","wb").write(b)',
+    'im=Image.open(r"C:\\\\T\\\\a.png")',
+    'im.save(r"C:\\\\T\\\\b.png")',
+    '"@',
+  ].join('\n');
+  const v = assertDeny(script, 'in-place-rewrite');
+  assert.doesNotMatch(v.reason, /then overwrites/, 'the reason must not claim an order it cannot see');
+  assert.match(v.reason, /reads and writes/, 'it should say what it can see');
+});
+
+test('the commonest refusal now names the shortest way through', () => {
+  // Of the 41 `in-place-rewrite` refusals in the 6,000-command sample, 28 are a bounded
+  // substitution that lacks an explicit encoding. The text offered only the copy route.
+  const noEncoding = assertDeny(
+    "$t=Get-Content a.md -Raw; $t=$t.Replace('a','b'); Set-Content a.md $t",
+    'in-place-rewrite',
+  );
+  assert.match(noEncoding.reason, /-Encoding utf8/, 'the two-word fix must be named');
+  // …and the same command with the encoding pinned passes, so the hint is true.
+  assertAllow("$t=Get-Content a.md -Raw -Encoding utf8; $t=$t.Replace('a','b'); Set-Content a.md $t -Encoding utf8");
+  // A slice refusal is a different mistake and must not carry the encoding advice.
+  const slice = assertDeny(
+    "$lines=Get-Content $f; $idx=(Select-String -Path $f -Pattern 'x').LineNumber; Set-Content $f $lines[0..($idx-2)]",
+    'slice-risk',
+  );
+  assert.doesNotMatch(slice.reason, /-Encoding utf8/);
+});
+
+test('Python reads and overwrites the same file', () => {
+  // The mode argument is what separates read from write; a mode-less `open()` reads.
+  assertDeny('python -c "open(\'a.md\',\'w\').write(open(\'a.md\').read())"', 'in-place-rewrite');
+  assertAllow('python -c "print(open(\'a.md\').read())"');
+  assertAllow('python -c "open(\'b.md\',\'w\').write(\'x\')"');
+  // A path built by a call is not recorded as a file name: `[^,)]+` stopped inside the call
+  // and the fragment matched nothing real, turning a read-only script into a rewrite.
+  assertAllow('python -c "import os; p=os.path.join(d,\'a.json\'); print(open(p, encoding=\'utf-8\').read())"');
+});
+
+test('a shell redirection on the read side counts too', () => {
+  // `tr a-z A-Z < a.md > a.md` empties the file: the shell truncates the output before the
+  // command reads. The head scan only knew reader *commands*, so the input side was missed.
+  assertDeny('tr a-z A-Z < a.md > a.md', 'in-place-rewrite', BASH);
+  assertAllow('tr a-z A-Z < a.md > b.md', BASH);
+  assertAllow('cat a.md > b.md', BASH);
+});
+
 test('.NET writes participate in the order check', () => {
   // Giving .NET writes no statement index made the last-write lookup return -1,
   // which emptied the read set and let 223 historical commands through.
   assertDeny("$f='a.md'; $t=[IO.File]::ReadAllText($f); [IO.File]::WriteAllText($f,$t)", 'in-place-rewrite');
   assertDeny("$f='a.md'; $t=Get-Content $f -Raw; [IO.File]::WriteAllText($f,$t)", 'in-place-rewrite');
+});
+
+test('the same rewrite in JavaScript is guarded too', () => {
+  // The hazard does not care which language spells it: reading a file and writing it back
+  // replaces the only copy exactly as `Get-Content f | Set-Content f` does. Neither `fs`
+  // pattern was known, so a `node -e` one-liner was unguarded while the PowerShell spelling
+  // of the same act was refused. Measured 2026-11-25.
+  assertDeny(
+    `node -e "const fs=require('fs'); const s=fs.readFileSync('a.md','utf8'); fs.writeFileSync('a.md', s);"`,
+    'in-place-rewrite',
+  );
+  assertDeny(
+    `node -e "const fs=require('fs'); let s=fs.readFileSync(p); s=s.replace(/x/g,'y'); fs.writeFileSync(p, s);"`,
+    'in-place-rewrite',
+  );
+  // Writing somewhere else, or only writing, is not this rule.
+  assertAllow(`node -e "const fs=require('fs'); fs.writeFileSync('out.md', 'hi');"`);
+  assertAllow(`node -e "const fs=require('fs'); const s=fs.readFileSync('a.md'); console.log(s);"`);
 });
 
 test('a read folded into the write statement is still a read', () => {

@@ -253,6 +253,85 @@ test('nesting different shells is read through, not counted as one level each ti
   }
 });
 
+test('a program that hands its string to a shell is a delete one layer down', () => {
+  // `execSync('Remove-Item x')` and `os.system(<delete>)` run a shell command from inside a
+  // child process. Nothing else here looked at them: the deleting APIs are known by name
+  // (`rmSync`, `rmtree`), and the spawn call was consulted only when the payload named a
+  // wipe program — so both spellings were allowed while the direct one was refused.
+  // Measured 2026-11-25.
+  const Q = "'";
+  for (const command of [
+    `node -e "require(${Q}child_process${Q}).execSync(${Q}Remove-Item x${Q})"`,
+    `node -e "require(${Q}child_process${Q}).execSync(${Q}rm -rf /tmp/x${Q})"`,
+    `node -e "const {execSync} = require(${Q}child_process${Q}); execSync(${Q}del x${Q})"`,
+    `python -c "import os; os.system(${Q}Remove-Item x${Q})"`,
+  ]) {
+    assert.equal(verdict(command), 'deny/script', `shell delete from inside a program: ${command}`);
+  }
+});
+
+test('a body that only prints the verb is not a delete', () => {
+  // The mirror. Refusing these made it impossible to write a fixture, a note or a test
+  // about the guard without leaving the tool call — and the verb in there erases nothing.
+  const Q = "'";
+  for (const command of [
+    `node -e "console.log(${Q}Remove-Item x${Q})"`,
+    `python -c "print(${Q}Remove-Item x${Q})"`,
+    `bash -c "echo Remove-Item x"`,
+    `pwsh -c "Write-Output ${Q}Remove-Item x${Q}"`,
+  ]) {
+    assert.equal(verdict(command), 'allow', `printing the verb refused: ${command}`);
+  }
+  // …but a body with a real delete after the print still refuses: the body is split first.
+  assert.equal(verdict(`bash -c "echo starting; rm -rf /tmp/x"`), 'deny/script');
+  assert.equal(verdict(`pwsh -c "Write-Output hi; Remove-Item C:\\x"`), 'deny/script');
+});
+
+test('an assigned here-string is data, not a program', () => {
+  // A here-string holds text. `$b = @'…'@` stores it; nothing inside runs. The text scans
+  // that look for `[scriptblock]::Create(…)` and inline-shell bodies match raw characters,
+  // so a note that *quotes* such a call was read as making the call — measured 2026-11-25,
+  // on a release note listing `& ([scriptblock]::Create("Remove-Item …"))` as an example.
+  const HERE = (body) => `@'\n${body}\n'@`;
+  for (const command of [
+    `$b = ${HERE(`- & ([scriptblock]::Create("Remove-Item x")) is refused`)}\nWrite-Output $b`,
+    `$b = ${HERE('the rule refuses Remove-Item')}\nWrite-Output $b`,
+    `$b = ${HERE('pwsh -enc <base64> decodes to a command')}\nWrite-Output $b`,
+    `$b = ${HERE('cmd /c powershell -c sdelete x is refused')}\nWrite-Output $b`,
+  ]) {
+    assert.equal(verdict(command), 'allow', `documentation read as code: ${command.split('\n')[1]}`);
+  }
+});
+
+test('a here-string that IS the program is still read', () => {
+  // The mirror, and the reason the mask only covers the assigned form: here the here-string
+  // is the body handed to an interpreter, so its text really does run.
+  const HERE = (body) => `@'\n${body}\n'@`;
+  for (const [command, kind] of [
+    [`python -c ${HERE('import shutil; shutil.rmtree("x")')}`, 'deny/script'],
+    [`node -e ${HERE('require("fs").rmSync("x")')}`, 'deny/script'],
+    [`bash -c ${HERE('shred -u /tmp/x')}`, 'deny/wipe'],
+    [`& ([scriptblock]::Create(${HERE('Remove-Item x.txt')}))`, 'deny/opaque'],
+  ]) {
+    assert.equal(verdict(command), kind, `a here-string body was hidden: ${command.split('\n')[1]}`);
+  }
+});
+
+test('a bare iex takes its text from the pipe, which cannot be read', () => {
+  // `@'…'@ | iex` was allowed: the scan for an unreadable body saw nothing after `iex` and
+  // read that as "nothing to read", while `iex $b` with the same content was refused.
+  const HERE = (body) => `@'\n${body}\n'@`;
+  for (const command of [
+    `${HERE('Remove-Item x.txt')} | iex`,
+    `${HERE('Remove-Item x.txt')} | Invoke-Expression`,
+    `Get-Content script.txt | iex`,
+  ]) {
+    assert.equal(verdict(command), 'deny/opaque', `piped input allowed: ${command.split('\n')[0]}`);
+  }
+  // A literal body still passes, so ordinary one-liners are untouched.
+  assert.equal(verdict('Invoke-Expression "Write-Output \'hi\'"'), 'allow');
+});
+
 test('a shell command line is read through, not stopped at its head', () => {
   // A shell runs the program named in its arguments, and a shell can be started by another
   // launcher. Reading only the head of the statement missed four shapes, all measured
@@ -331,7 +410,13 @@ test('each untranslatable target form gets its own reason', () => {
   assert.match(reason(`Remove-Item ${DOLLAR}var`), /variable `\$name`/);
   assert.match(reason(`Remove-Item ${DOLLAR}{TARGET_DIR}`), /braced variable/);
   assert.match(reason(`Remove-Item ${DOLLAR}(Get-ChildItem .)`), /command substitution/);
-  assert.match(reason('Remove-Item `Get-Date`'), /backtick/);
+  // A backtick before a *special* character produces a control character or breaks the
+  // quoting, so the name cannot be written down and the refusal must name the escape. A
+  // backtick before an ordinary character just escapes it, so that target is a literal and
+  // is redirected — see `guard.test.mjs`.
+  assert.match(reason('Remove-Item "backup`n.txt"'), /backtick escape/i);
+  assert.doesNotMatch(reason('Remove-Item "backup`n.txt"'), /command substitution/i);
+  assert.equal(verdict('Remove-Item `Get-Date`'), 'rewrite/delete');
 });
 
 // ---------------------------------------------------------------------------

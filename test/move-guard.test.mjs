@@ -213,3 +213,92 @@ test('a bad operand does not stop the good ones in the same call', async () => {
   assert.match(result.failures[0].error, /refusing to recycle/);
   assert.match(result.failures[1].error, /no such file/);
 });
+
+test('an extended-length prefix is normalized to the path it denotes', () => {
+  // `\\?\C:\x` names `C:\x`. Before this normalization the prefix made every
+  // string comparison below fail, and the bridge dropped it before recycling —
+  // so the guard said "fine" and the real Windows directory went to the bin
+  // (measured 2026-11-26: a `\\?\`-prefixed temp file really was recycled).
+  const pairs = [
+    ['\\\\?\\C:\\tmp\\a.txt', 'C:\\tmp\\a.txt'],
+    ['\\\\?\\D:\\Projects\\demo\\sub', 'D:\\Projects\\demo\\sub'],
+    ['//?/D:/Projects/demo/x.txt', 'D:\\Projects\\demo\\x.txt'],
+    ['\\\\?\\UNC\\server\\share\\folder', '\\\\server\\share\\folder'],
+  ];
+  for (const [raw, expected] of pairs) {
+    const verdict = validateTrashTarget(raw, CWD);
+    assert.equal(verdict.ok, true, `${raw} must be accepted: ${verdict.error ?? ''}`);
+    assert.equal(verdict.path, expected, `${raw} must resolve to ${expected}`);
+  }
+});
+
+test('a prefixed target gets exactly the verdict of its unprefixed form', () => {
+  // One case per rule the prefix used to defeat: Windows, Program Files, the bin
+  // store, a drive root, a share root, a share, the workspace root and a child.
+  const shapes = [
+    'C:\\Windows',
+    'C:\\Windows\\System32\\kernel32.dll',
+    'D:\\Program Files',
+    'D:\\Program Files\\app\\x.dll',
+    'C:\\$Recycle.Bin',
+    'C:\\$Recycle.Bin\\S-1-5-21-1',
+    'D:\\',
+    '\\\\server\\share',
+    '\\\\server\\share\\folder',
+    'D:\\Projects\\demo',
+    'D:\\Projects\\demo\\sub\\x.txt',
+    'D:\\tmp\\ordinary.txt',
+  ];
+  for (const plain of shapes) {
+    const prefixed = plain.startsWith('\\\\')
+      ? `\\\\?\\UNC\\${plain.slice(2)}`
+      : `\\\\?\\${plain}`;
+    const a = validateTrashTarget(plain, CWD);
+    const b = validateTrashTarget(prefixed, CWD);
+    assert.equal(
+      b.ok,
+      a.ok,
+      `${prefixed} must get the same verdict as ${plain}: ${a.error ?? 'accepted'} / ${b.error ?? 'accepted'}`,
+    );
+    if (a.ok) assert.equal(b.path, a.path, `${prefixed} must resolve like ${plain}`);
+  }
+});
+
+test('a prefixed drive with no path is the drive root, not the cwd on it', () => {
+  // `\\?\D:` left as `D:` would resolve drive-relatively to "the current directory
+  // on D:" — a path inside the session, not the root. As the root it meets the
+  // drive-root rule, which is the safe reading.
+  const verdict = validateTrashTarget('\\\\?\\D:', CWD);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.error, /drive root/);
+});
+
+test('the workspace half sees the normalized path too', () => {
+  const root = 'D:\\Projects\\demo';
+  for (const [raw, expected] of [
+    ['\\\\?\\D:\\Projects\\demo', /session workspace root/],
+    ['\\\\?\\D:\\Projects\\demo\\sub\\x.txt', undefined],
+    ['\\\\?\\D:\\Projects', /parent of the session workspace/],
+  ]) {
+    const verdict = validateTrashTarget(raw, CWD);
+    assert.equal(verdict.ok, true, `${raw} must pass the root rules`);
+    const reason = workspaceRootReason(verdict.path, root);
+    if (expected === undefined) assert.equal(reason, undefined, `${raw} is inside the workspace`);
+    else assert.match(reason, expected);
+  }
+});
+
+test('device and volume paths are refused rather than guessed', () => {
+  // Dropping the prefix turns `\\?\Volume{GUID}\x` into a relative path, which the
+  // bridge resolves against the plugin's directory — and would recycle whatever
+  // shares that name. Refusing is the only safe answer.
+  for (const p of [
+    '\\\\?\\Volume{b9e9178a-d160-4c52-877e-5bb15f42c501}\\x',
+    '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\x',
+    '\\\\.\\C:\\x',
+  ]) {
+    const verdict = validateTrashTarget(p, CWD);
+    assert.equal(verdict.ok, false, `${p} must be refused`);
+    assert.match(verdict.error, /device path/);
+  }
+});
