@@ -105,6 +105,25 @@ test('script-file and inline-string deletes are denied', () => {
   assertDeny('echo "Remove-Item C:\\x" > clean.ps1', 'script');
 });
 
+test('the script-write rule covers shell scripts, not every language', () => {
+  // A shell script's body is shell text: the verb table is exact, and running the file by
+  // path is the hole the guard cannot see into, so the write is refused.
+  assertDeny('Set-Content clean.ps1 "Remove-Item C:\\tmp\\x"', 'script');
+  assertDeny('"Remove-Item x" | Out-File clean.sh', 'script');
+  assertDeny('Set-Content teardown.bat "del /s /q C:\\tmp"', 'script');
+
+  // A Python/JavaScript body is only approximated by any text table, and the idiom is a
+  // helper written to %TEMP% and run — refusing it cost 26 of 6,000 sampled commands and
+  // each one just split into two commands, which the guard never sees as a pair.
+  assertAllow('Set-Content "$env:TEMP\\fix.py" "import os; os.remove(p)"');
+  assertAllow('Set-Content test.js "fs.rmSync(tmp, {recursive:true})"');
+  assertAllow("Set-Content notes.py \"del d['a']\"");
+
+  // The same code handed to an interpreter *inline* runs now, and is judged.
+  assertDeny('python -c "import os; os.remove(p)"', 'script');
+  assertDeny('node -e "require(\'fs\').rmSync(\'x\')"', 'script');
+});
+
 test('dangerous absolute targets are denied', () => {
   assertDeny('Remove-Item C:\\ -Recurse -Force', 'forbidden-target');
   assertDeny('rm -rf /', 'forbidden-target');

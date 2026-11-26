@@ -65,8 +65,12 @@ a security read:
   half.
 - Tools outside the covered list (`pwsh`, `powershell`, `cmd`, `bash`, `sh`,
   `zsh`, `shell`, `terminal_send`, `terminal_write`) are not inspected at all.
-- Deletes inside a script file whose body the guard never sees: it refuses the
-  write and the inline forms it can see, not the executed body.
+- Deletes inside a script file whose body the guard never sees. It refuses the write when the
+  body is **shell** text (`.ps1`/`.bat`/`.sh`), where the verb table is exact, and it judges
+  the inline forms it can see. A `.py`/`.js`/`.ts` body is not refused at write time: any text
+  table for those languages is a guess, and "write it, then run it" is one command away from
+  being out of reach anyway (measured: refusing those writes cost 26 of 6,000 sampled
+  commands and each one simply split in two).
 - Overwrites that do not read the file first (`echo x > notes.md`,
   `Invoke-WebRequest -OutFile`). Those are deliberate rewrites,
   not read-modify-write: the new content does not depend on the old, and refusing

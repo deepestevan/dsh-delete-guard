@@ -57,15 +57,25 @@ async function hook(command) {
 test('a dry run is never rewritten into a real deletion', async () => {
   // A `rewrite` verdict is the dangerous one: it renders as "re-run this as
   // file_trash". A dry run must never produce that.
+  //
+  // A command whose deletes all carry `-WhatIf` previews and deletes nothing, so the guard
+  // lets it through untouched — a refusal would protect nothing and cost a round. What
+  // matters is that no `file_trash` instruction is produced for it.
   for (const cmd of [
     'Remove-Item -LiteralPath C:\\tmp\\a.txt -WhatIf',
     'Remove-Item -WhatIf C:\\tmp\\a.txt',
   ]) {
     const d = await hook(cmd);
-    assert.equal(d.kind, 'deny', `expected deny for ${cmd}`);
-    assert.equal(d.info.code, 'DELETE_GUARD_DRY_RUN', `code for ${cmd}`);
-    assert.doesNotMatch(d.reason, /Re-run this as/, `a dry run must not be given as a delete to re-run: ${cmd}`);
+    assert.equal(d.kind, 'allow', `a preview deletes nothing, so it is passed through: ${cmd}`);
+    assert.doesNotMatch(d.reason ?? '', /Re-run this as/);
   }
+
+  // Mixing a preview with a real delete is still refused: one deny covers the whole call,
+  // so the rewrite instruction would name the previewed path as well.
+  const mixed = await hook('Remove-Item -WhatIf a.txt; Remove-Item b.txt');
+  assert.equal(mixed.kind, 'deny');
+  assert.equal(mixed.info.code, 'DELETE_GUARD_DRY_RUN');
+  assert.doesNotMatch(mixed.reason, /Re-run this as/);
 
   // `Clear-RecycleBin` is refused outright (not rewritten), which is already safe:
   // the model gets a refusal, not a delete instruction. Assert only that no

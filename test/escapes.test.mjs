@@ -407,7 +407,9 @@ test('reading disk state is not erasing it', () => {
 // ---------------------------------------------------------------------------
 
 test('each untranslatable target form gets its own reason', () => {
-  assert.match(reason(`Remove-Item ${DOLLAR}var`), /variable `\$name`/);
+  // The reason names the variable that was written: "a variable `$name`" read like a
+  // placeholder, so the caller could not tell which name the guard meant.
+  assert.match(reason(`Remove-Item ${DOLLAR}var`), /the variable `\$var`/);
   assert.match(reason(`Remove-Item ${DOLLAR}{TARGET_DIR}`), /braced variable/);
   assert.match(reason(`Remove-Item ${DOLLAR}(Get-ChildItem .)`), /command substitution/);
   // A backtick before a *special* character produces a control character or breaks the

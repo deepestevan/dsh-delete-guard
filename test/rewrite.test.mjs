@@ -328,10 +328,26 @@ test('a command that both deletes and truncates reports the truncation', () => {
   assert.equal(v.kind, 'in-place-rewrite');
 });
 
-test('blockTruncatingWrites turns both rules off', () => {
+test('the old single key still turns both content rules off', () => {
   const relaxed = { ...PWSH, blockTruncatingWrites: false };
   assertAllow(INCIDENT, relaxed);
   assertAllow('(Get-Content $f) | Set-Content $f', relaxed);
+});
+
+test('the two content rules switch independently', () => {
+  // A profile may want the rewrite rule without the slice rule, or the reverse.
+  const noSlice = { ...PWSH, blockUncheckedSliceWrite: false };
+  assertAllow('$keep=$lines[0..($idx-2)]; Set-Content -LiteralPath $out -Value $keep', noSlice);
+  assertDeny('$c=Get-Content $f; Set-Content $f $c', 'in-place-rewrite', noSlice);
+
+  const noRewrite = { ...PWSH, blockInPlaceRewrite: false };
+  assertAllow('$c=Get-Content $f; Set-Content $f $c', noRewrite);
+  assertDeny('$keep=$lines[0..($idx-2)]; Set-Content -LiteralPath $out -Value $keep', 'slice-risk', noRewrite);
+
+  const none = { ...PWSH, blockInPlaceRewrite: false, blockUncheckedSliceWrite: false };
+  assertAllow('$keep=$lines[0..($idx-2)]; Set-Content -LiteralPath $out -Value $keep', none);
+  // …while the empty-write rule is a third, separate switch.
+  assertDeny('Clear-Content notes.md', 'empty-write', none);
 });
 
 test('a plain delete still redirects to file_trash', () => {

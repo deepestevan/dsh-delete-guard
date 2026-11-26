@@ -81,7 +81,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | **A command name spelled with backticks** | ``s`delete``, ``Clear-Recy`cleBin``, ``R`emove-I`tem``: in PowerShell a backtick is an escape, so the real name is judged |
 | Emptying the bin | `Clear-RecycleBin` (bare, `&`, child shell, `-EncodedCommand`), `SHEmptyRecycleBin`, driving bin items' shell verbs, deleting `$Recycle.Bin` contents |
 | Locations without a bin | UNC shares, mapped network drives (`S:` → a share), exFAT/FAT32 volumes, where "recycling" is a permanent erase |
-| Deletes inside scripts | shell / Python / Node inline bodies, and writing delete text into `.ps1`/`.sh`/`.py` |
+| Deletes inside scripts | shell / Python / Node inline bodies, and writing delete text into `.ps1`/`.sh`/`.bat`, where the shell verb table is exact. Writing `.py` / `.js` is not restricted: the table would be a guess there, and "write it, then run it" is one command away from being out of reach anyway |
 | **Reading a file and rewriting it in one command** | `(Get-Content $f) \| Set-Content $f`, `$c = Get-Content $f; Set-Content $f $c`, `cat f > f`, `::ReadAllText` → `::WriteAllText` — the new content comes from the only copy. `sed -i` passes only for a bounded `s///` script; `d` and whole-line patterns stay refused. The spelling that copies the **target** to `<name>.bak` / `.tmp` / `.new` first is allowed |
 | **Leaving a file empty** | `Clear-Content $f`, `Set-Content $f ''`, `truncate -s 0 $f`, a bare `> $f`, `cp /dev/null $f` — the old content is not saved anywhere; a one-step write that carries new content is unaffected |
 | **A read folded into the write statement** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)` — reads, truncates and writes back on one line |
@@ -116,7 +116,9 @@ to `false` has to be restated to stay off):
 | `forbidEmptyRecycleBin` | `true` | Refuse emptying or modifying the bin |
 | `forbidWipe` | `true` | Refuse `shred` / `sdelete` / `srm` / `cipher /w` / `format` |
 | `blockScriptDeletes` | `true` | Refuse deletes in script files and inline strings |
-| `blockTruncatingWrites` | `true` | Refuse read-then-rewrite of the same file, and an unchecked slice endpoint in a command that writes |
+| `blockTruncatingWrites` | `true` | Compatibility key: sets both rules below, unless they are named |
+| `blockInPlaceRewrite` | `true` | Refuse read-then-rewrite of the same file |
+| `blockUncheckedSliceWrite` | `true` | Refuse an unchecked `$idx ± n` slice endpoint in a command that writes |
 | `blockEmptyWrites` | `true` | Refuse commands that leave a file with no content (`Clear-Content`, an empty `Set-Content`, `truncate -s 0`, a bare redirect) |
 | `uncRecoverableMove` | `true` | Share deletes: copy to a local NTFS volume, verify, recycle the copy, then remove the original. `false` keeps the plain refusal |
 | `stagingRoot` | `%LOCALAPPDATA%\dsh-delete-guard\staging` | Staging directory for share deletes (must be on a local volume with a bin) |
@@ -189,7 +191,7 @@ Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
 node test/run-all.mjs
 ```
 
-233 cases across fourteen layers: command classification (50), overwrite guard (43),
+235 cases across fourteen layers: command classification (51), overwrite guard (44),
 rule holes (12), share staging (8), `file_trash` operand guard (20), host schema +
 hook wiring (14), host schema acceptance (5), live end-to-end against the real
 Recycle Bin (15, including a real `\\localhost\C$` path), failure diagnosis (7),

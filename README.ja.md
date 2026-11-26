@@ -78,7 +78,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | **バッククォートで綴ったコマンド名** | ``s`delete``、``Clear-Recy`cleBin``、``R`emove-I`tem``：PowerShell のバッククォートはエスケープなので、実際の名前で判定します |
 | ごみ箱の空化 | `Clear-RecycleBin`（素の形・`&`・子シェル・`-EncodedCommand`）、`SHEmptyRecycleBin`、ごみ箱項目のシェル動詞、`$Recycle.Bin` 配下の直接削除 |
 | ごみ箱が無い場所 | UNC 共有、マップされたネットワークドライブ（`S:` → 共有）、exFAT/FAT32 ボリューム（そこで「ごみ箱へ」は完全消去と同じ） |
-| スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.py` への書き込み |
+| スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.bat` への書き込み（シェル動詞表はここでは正確）。`.py`/`.js` への書き込みは制限しません——そちらの表は近似で、「書いてから実行」は別コマンドに分ければ届かないため |
 | **同一ファイルの読み書き** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`cat f > f`、`::ReadAllText` → `::WriteAllText`——新しい内容は唯一のコピーから作られます。`sed -i` は有界な `s///` のみ許可し、`d` と行全体のパターンは拒否。**元ファイル**を `<name>.bak` / `.tmp` / `.new` に先にコピーする書き方は許可 |
 | **ファイルを空にする** | `Clear-Content $f`、`Set-Content $f ''`、`truncate -s 0 $f`、裸の `> $f`、`cp /dev/null $f`——古い内容の控えが残りません。新しい内容を持つ一括書き込みは対象外 |
 | **書き込み文に折り込まれた読み取り** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`——1 行で読み・切り詰め・書き戻し |
@@ -113,7 +113,9 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | `forbidEmptyRecycleBin` | `true` | ごみ箱の空化・改変を拒否 |
 | `forbidWipe` | `true` | `shred` / `sdelete` / `srm` / `cipher /w` / `format` を拒否 |
 | `blockScriptDeletes` | `true` | スクリプトファイルとインライン文字列内の削除を拒否 |
-| `blockTruncatingWrites` | `true` | 同一ファイルの読み書きと、書き込みを伴う未検査スライス端点を拒否 |
+| `blockTruncatingWrites` | `true` | 互換キー：下の 2 つを個別に書かなければ両方に効く |
+| `blockInPlaceRewrite` | `true` | 同一ファイルを読んで書き戻す書き換えを拒否 |
+| `blockUncheckedSliceWrite` | `true` | 書き込みを伴う未検査の `$idx ± n` スライス端点を拒否 |
 | `blockEmptyWrites` | `true` | ファイルを空にする書き込み（`Clear-Content`、空値の `Set-Content`、`truncate -s 0`、裸のリダイレクト）を拒否 |
 | `uncRecoverableMove` | `true` | 共有の削除：ローカル NTFS へ複製 → 検証 → 複製をごみ箱へ → その後に元を削除。`false` で拒否のみ |
 | `stagingRoot` | `%LOCALAPPDATA%\dsh-delete-guard\staging` | 共有削除のステージング先（ごみ箱のあるローカルボリューム） |
@@ -180,7 +182,7 @@ UNC ではありませんが、ブリッジはドライブ種別で判定して�
 node test/run-all.mjs
 ```
 
-14 層・233 ケース：コマンド分類（50）、上書きガード（43）、規則の穴（12）、共有ステージング（8）、
+14 層・235 ケース：コマンド分類（51）、上書きガード（44）、規則の穴（12）、共有ステージング（8）、
 `file_trash` オペランドガード（20）、ホストのスキーマとフック配線（14）、ホストのスキーマ受理（5）、
 実ごみ箱に対するエンドツーエンド（15、実 `\\localhost\C$` パスを含む）、失敗診断（7）、
 シェル横断の判定（14）、事前フィルタの一貫性（5）、回避形態（32）、引数の形状（8）。`test/` は tarball に

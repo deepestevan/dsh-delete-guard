@@ -76,7 +76,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | **用反引号拼出的命令名** | ``s`delete``、``Clear-Recy`cleBin``、``R`emove-I`tem``：反引号在 PowerShell 里是转义，按真名判定 |
 | 清空回收站 | `Clear-RecycleBin`（含 `&`、子壳、`-EncodedCommand` 形态）、`SHEmptyRecycleBin`、对回收站条目驱动 shell 动词、直接删 `$Recycle.Bin` 内容 |
 | 没有回收站的位置 | UNC 共享、映射网络驱动器（`S:` → 共享）、exFAT/FAT32 卷（在那里"回收"等于永久擦除） |
-| 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.py` |
+| 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.bat`（shell 动词表对它们精确）。写 `.py`/`.js` 不受限——那类词表只是近似，而「写到临时文件再跑」换个命令就绕开了 |
 | **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本。`sed -i` 只放行有界的 `s///`，`d` 与整行模式仍拒。先**把原文件**复制到 `<name>.bak` / `.tmp` / `.new` 再写回的放行；把**新内容**写进临时文件再覆盖回原件的除外——那一步没有留下旧内容 |
 | **把文件写成空** | `Clear-Content $f`、`Set-Content $f ''`、`truncate -s 0 $f`、裸 `> $f`、`cp /dev/null $f`——旧内容没留副本；带新内容的一次性写不受影响 |
 | **未断言的切片端点** | 同一命令里既写文件、又用 `$idx ± n` 当区间端点（`$l[0..($idx-2)]`、`-First ($i-1)`），而 `$idx` 从没检查过 `$null`。`$null` 在 PowerShell 里不报错：`0..($null-2)` 就是 `0..-2` = 首行 + 末两行 |
@@ -108,7 +108,9 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | `forbidEmptyRecycleBin` | `true` | 禁止清空或改动回收站 |
 | `forbidWipe` | `true` | 禁止 `shred` / `sdelete` / `srm` / `cipher /w` / `format` |
 | `blockScriptDeletes` | `true` | 禁止脚本文件与内联字符串里的删除 |
-| `blockTruncatingWrites` | `true` | 禁止「读改写同一文件」与「未断言的切片端点 + 写文件」 |
+| `blockTruncatingWrites` | `true` | 兼容键：未单独写下面两项时，对两者都生效 |
+| `blockInPlaceRewrite` | `true` | 禁止「读同一文件再覆盖回去」的整档重写 |
+| `blockUncheckedSliceWrite` | `true` | 禁止未断言端点（`$idx ± n`）的切片 + 写文件 |
 | `blockEmptyWrites` | `true` | 禁止把文件写成空内容（`Clear-Content`、空值 `Set-Content`、`truncate -s 0`、裸重定向） |
 | `uncRecoverableMove` | `true` | 共享删除：先复制到本地 NTFS 卷 + 校验 + 回收副本，再删原件；`false` 则纯拒绝 |
 | `stagingRoot` | `%LOCALAPPDATA%\dsh-delete-guard\staging` | 共享删除的暂存目录（必须在有回收站的本地卷上） |
@@ -176,7 +178,7 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 node test/run-all.mjs
 ```
 
-233 项、十四层：命令分类（50）、覆盖守卫（43）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（20）、
+235 项、十四层：命令分类（51）、覆盖守卫（44）、规则漏洞（12）、暂存删除（8）、`file_trash` 操作数守卫（20）、
 宿主 schema 与钩子接线（14）、宿主 schema 受理（5）、对真实回收站的端到端（15，含真 `\\localhost\C$` 路径）、
 失败诊断（7）、跨 shell 判定（14）、快筛一致性（5）、逃逸形态（32）、参数形状（8）。
 `test/` 不进 tarball，所以打包前必须全绿；其中两层会加载宿主自己的校验器，找不到 DSH 安装时报「跳过」而非失败。
