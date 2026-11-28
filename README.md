@@ -6,7 +6,7 @@
 
 ```
 agent:  Remove-Item -Recurse -Force .\src
-被拒:    The delete guard blocked this delete. Re-run this as: file_trash with paths = ["…\src"]
+被拒:    The recycle-bin guard blocked this delete. … Re-run this as:  file_trash with paths = ["…\src"]
 随后:    file_trash → 移入回收站，「还原」可用
 ```
 
@@ -20,8 +20,8 @@ agent:  $lines=Get-Content $f; $idx=(…Select-String…).LineNumber; Set-Conten
 
 agent 删掉文件的原因通常很平常：记错路径、抄错一个字符、把 PowerShell 和 bash 的语法混在一起，
 或者没意识到某个 Windows 路径指的是什么。后果却可能不可逆——工作区被清空、整块盘被格式化、
-正在编辑的文档在一次写回后变成空白。这个插件针对的就是这一类事故，规则也不是凭想象列的：
-多数来自真实的删除记录（逐字写在 `docs/archive/incidents/`），其余来自审查中可复现的形态。
+正在编辑的文档在一次写回后变成空白。这个插件针对的就是这一类事故：多数规则来自真实的删除记录，
+其余来自审查中可复现的形态。
 
 目标不是禁止删除，而是让每一次删除都还有退路：能进回收站的进回收站；进不了回收站的
 （永久擦除工具、清空回收站、磁盘级操作、没有回收站的网络位置）直接拒绝，并给出下一步。
@@ -49,16 +49,17 @@ agent 删掉文件的原因通常很平常：记错路径、抄错一个字符�
 # 从 npm 安装
 dsh plugin --profile web add dsh-delete-guard
 # 或直接从仓库安装（npm 不可用时）
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.5
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.5.0
 # 或者从本地 tarball（改过源码时用这条）
 pnpm pack --pack-destination ./temp/pack     # 先升 package.json 的 version
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.5.tgz
-# 重启 dsh web：lib/*.js 只在进程启动时加载
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.5.0.tgz
+# 装完确认会话里已经出现 file_trash 工具；没有就重启 dsh web
 ```
 
 `file:` 必须指向 tarball，不能指向源码目录——目录形式 pnpm 会硬链接，源码一挪插件就悬空。
 
-更新走 `remove` + `add` 两步：单跑 `add` 可能返回 `Already up to date` 而什么都没换，而 `lib/*.js` 只有进程重启才会重新加载。
+更新走 `remove` + `add` 两步：同版本号下单跑 `add` 可能返回 `Already up to date` 而什么都没换。
+`remove` 之后插件会立刻从运行中的宿主卸下，`add` 之后重新加载——这一小段时间里没有守卫。
 
 ## 挡住什么
 
@@ -84,7 +85,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | **用反引号拼出的命令名** | ``s`delete``、``Clear-Recy`cleBin``、``R`emove-I`tem``：反引号在 PowerShell 里是转义，按真名判定 |
 | 清空回收站 | `Clear-RecycleBin`（含 `&`、子壳、`-EncodedCommand` 形态）、`SHEmptyRecycleBin`、对回收站条目驱动 shell 动词、直接删 `$Recycle.Bin` 内容 |
 | 没有回收站的位置 | UNC 共享、映射网络驱动器（`S:` → 共享）、exFAT/FAT32 卷（在那里"回收"等于永久擦除） |
-| 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.bat`（shell 动词表对它们精确）。写 `.py`/`.js` 不受限——那类词表只是近似，而「写到临时文件再跑」换个命令就绕开了 |
+| 脚本内删除 | 内联 shell / Python / Node 体里的删除动词与擦除调用；把含删除的文本写进 `.ps1`/`.sh`/`.bat`（shell 动词表对它们精确）。写 `.py`/`.js` 不受限 |
 | **读改写同一个文件** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`cat $f > $f`、`::ReadAllText` → `::WriteAllText`——新内容来自唯一的副本。`sed -i` 只放行有界的 `s///`，`d` 与整行模式仍拒。先**把原文件**复制到 `<name>.bak` / `.tmp` / `.new` 再写回的放行；把**新内容**写进临时文件再覆盖回原件的除外——那一步没有留下旧内容 |
 | **把文件写成空** | `Clear-Content $f`、`Set-Content $f ''`、`truncate -s 0 $f`、裸 `> $f`、`cp /dev/null $f`——旧内容没留副本；带新内容的一次性写不受影响 |
 | **未断言的切片端点** | 同一命令里既写文件、又用 `$idx ± n` 当区间端点（`$l[0..($idx-2)]`、`-First ($i-1)`），而 `$idx` 从没检查过 `$null`。`$null` 在 PowerShell 里不报错：`0..($null-2)` 就是 `0..-2` = 首行 + 末两行 |
@@ -115,7 +116,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | `blockDestructiveCommands` | `true` | 拦截 shell 删除并重定向到 `file_trash` |
 | `forbidEmptyRecycleBin` | `true` | 禁止清空或改动回收站 |
 | `forbidWipe` | `true` | 禁止 `shred` / `sdelete` / `srm` / `cipher /w` / `format` |
-| `blockScriptDeletes` | `true` | 禁止脚本文件与内联字符串里的删除 |
+| `blockScriptDeletes` | `true` | 禁止 shell 脚本与内联字符串里的删除 |
 | `blockTruncatingWrites` | `true` | 兼容键：未单独写下面两项时，对两者都生效 |
 | `blockInPlaceRewrite` | `true` | 禁止「读同一文件再覆盖回去」的整档重写 |
 | `blockUncheckedSliceWrite` | `true` | 禁止未断言端点（`$idx ± n`）的切片 + 写文件 |
@@ -163,7 +164,7 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 
 | 不覆盖 | 原因 |
 | --- | --- |
-| 脚本文件里已有的删除（守卫从未见过内容） | 只能拒绝写入与看得见的内联形态，不能执行期改写 |
+| 脚本文件里已有的删除（守卫从未见过内容） | 只能拒绝 shell 脚本的写入与看得见的内联形态，不能执行期改写 |
 | `Add-Type` 里写任意 C#（如 `DeleteFileW`） | 文本判定够不到；只有针对回收站的 API 被点名拦掉 |
 | 命令名先拼进变量再 `& $c` 调用 | 文本层面无法求值 |
 | 表格外工具名的执行通道（自定义 shell 工具、第三方插件） | 覆盖名单是显式的，见下 |
@@ -175,7 +176,8 @@ UNC 路径下不存在回收站：`SHFileOperationW` 在那里是擦除并返回
 | 写完之后按体积判断有没有被截断 | 回滚需要覆盖前的旧内容，而 `tools/post-execute` 只能把结果改成反馈 |
 | 把共享上的东西 `Move-Item` / `robocopy /MOV` 到本地 | 内容到了目标位置，但共享上的原件被永久删除，没有回收站记录 |
 | **内含非法名字的目录**（名字以空格或点结尾，再由 WSL、解压工具或同步客户端留下） | Win32 写到路径里会截掉尾随的空格/点，所以目录树走不完。工具会指出是哪个条目、为什么；把那个名字改成不以空格或点结尾即可 |
-| **被进程占用的目录**（工作目录设在里面，或里面某个文件开着） | 占用它的进程退出后才能删。工具会说这是占用，并可据此去查是谁——它不代查 |
+| **被进程占用的目录**（工作目录设在里面，或里面某个文件开着） | 占用它的进程退出后才能删。工具会说这是占用，可据此去查是哪个进程 |
+| **回收站被策略禁用，或单个条目超过该卷回收站上限** | 这种删除会真的抹掉内容，工具无法阻止；它会检查本次删除有没有产生回收记录，没有就在结果里如实报告，而不是报「已进回收站」 |
 
 覆盖的 shell 工具名：`pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`、`shell`、
 `terminal_send`、`terminal_write`。
@@ -198,7 +200,7 @@ node test/run-all.mjs
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么 |
 | [SECURITY.md](SECURITY.md) | 威胁模型：策略层，不是沙箱 |
-| [docs/archive/incidents/](docs/archive/incidents/) | 规则的实测依据与逐字命令，见 GitHub 仓库 |
+| [docs/archive/incidents/](https://github.com/deepestevan/dsh-delete-guard/tree/main/docs/archive/incidents) | 规则的实测依据与逐字命令 |
 | [LICENSE](LICENSE) | MIT |
 
 ## 许可

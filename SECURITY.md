@@ -45,7 +45,7 @@ command line.
   undoable. This is the one class where routing to the bin cannot help: on a UNC share
   there is no bin (`scripts/recycle-bin.ps1` refuses it), so prevention is the whole
   remedy. Record:
-  [docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md](docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md).
+  [docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md](https://github.com/deepestevan/dsh-delete-guard/blob/main/docs/archive/incidents/2026-11-14-full-file-rewrite-truncation.md).
 - **Working-tree content that git discards without a delete verb**: `git clean`,
   `git rm`, `git reset --hard`, `git checkout -- <path>` and `git restore <path>` are
   refused; `git clean -n`, `git checkout <branch>`, `git restore --staged` and
@@ -53,7 +53,7 @@ command line.
 
 ## Out of scope (by design, and verified as limits)
 
-The full list, with evidence, is in [README.md](README.md) 「不挡什么」; the per-rule measurements live in the maintainer's engineering notes (not shipped). The ones that matter for
+The full list, with evidence, is in [README.md](README.md) 「不挡什么」. The ones that matter for
 a security read:
 
 - `Add-Type` compiles arbitrary C#; nothing textual can stop it from calling
@@ -156,7 +156,7 @@ logs), re-classified with the matcher as it stood. 1,580 would be refused; **432
 were false positives (0.70% of every command ever run here)**. Records:
 `docs/archive/incidents/2026-11-24-rule-false-positive-sweep.md` (evidence) and
 `docs/archive/incidents/2026-11-24-fix-plan-2-4-2.md` (plan, including the direction that was
-rejected and why).
+rejected and why) — both in the repository.
 
 Two things from that exercise are worth keeping in view when changing a rule:
 

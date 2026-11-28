@@ -6,7 +6,7 @@
 
 ```
 agent:   Remove-Item -Recurse -Force .\src
-拒否:    The delete guard blocked this delete. Re-run this as: file_trash with paths = ["…\src"]
+拒否:    The recycle-bin guard blocked this delete. … Re-run this as:  file_trash with paths = ["…\src"]
 その後:  file_trash → ごみ箱へ移動。「元に戻す」が使える
 ```
 
@@ -22,8 +22,7 @@ agent:   $lines=Get-Content $f; $idx=(…Select-String…).LineNumber; Set-Conte
 打ち間違えた、PowerShell と bash の構文を混同した、Windows のパスが何を指すか気づかなかった。
 結果は取り返しがつかないことがあります——ワークスペースが空になる、ディスク全体が
 フォーマットされる、編集中の文書が 1 回の書き戻しで白紙になる。このプラグインが扱うのは
-その種の事故で、規則は想像で並べたものではありません。多くは実際に起きた削除の記録に
-由来し、逐語で `docs/archive/incidents/` に残しています。残りはレビューで再現できた形です。
+その種の事故です。規則の多くは実際に起きた削除の記録に由来し、残りはレビューで再現できた形です。
 
 目的は削除の禁止ではなく、どの削除にも戻り道を残すことです。ごみ箱に入れられるものは
 ごみ箱へ。入れられないもの（完全消去ツール、ごみ箱の空化、ディスク操作、ごみ箱の無い
@@ -56,15 +55,16 @@ Git Bash の `/c/...` パス、ごみ箱を空にするあらゆる書き方に�
 # npm から導入
 dsh plugin --profile web add dsh-delete-guard
 # またはリポジトリから直接
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.5
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.5.0
 # またはローカルの tarball から（ソースを変更したとき）
 pnpm pack --pack-destination ./temp/pack     # 先に package.json の version を上げる
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.5.tgz
-# dsh web を再起動（lib/*.js はプロセス起動時に読み込まれる）
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.5.0.tgz
+# 導入後にセッションへ file_trash が現れたか確認し、無ければ dsh web を再起動する
 ```
 
-更新は `remove` → `add` の 2 段階です。`add` だけだと `Already up to date` を返して何も
-変わらないことがあり、`lib/*.js` はプロセス再起動でしか読み直されません。
+更新は `remove` → `add` の 2 段階です。同じバージョンのまま `add` だけを実行すると
+`Already up to date` を返して何も変わらないことがあります。`remove` は実行中のホストから
+プラグインを即座に外し、`add` で読み直されます——その短い間はガードがありません。
 
 ## 何を止めるか
 
@@ -90,7 +90,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | **バッククォートで綴ったコマンド名** | ``s`delete``、``Clear-Recy`cleBin``、``R`emove-I`tem``：PowerShell のバッククォートはエスケープなので、実際の名前で判定します |
 | ごみ箱の空化 | `Clear-RecycleBin`（素の形・`&`・子シェル・`-EncodedCommand`）、`SHEmptyRecycleBin`、ごみ箱項目のシェル動詞、`$Recycle.Bin` 配下の直接削除 |
 | ごみ箱が無い場所 | UNC 共有、マップされたネットワークドライブ（`S:` → 共有）、exFAT/FAT32 ボリューム（そこで「ごみ箱へ」は完全消去と同じ） |
-| スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.bat` への書き込み（シェル動詞表はここでは正確）。`.py`/`.js` への書き込みは制限しません——そちらの表は近似で、「書いてから実行」は別コマンドに分ければ届かないため |
+| スクリプト内の削除 | シェル / Python / Node のインライン本体、および削除語を含むテキストの `.ps1`/`.sh`/`.bat` への書き込み（シェル動詞表はここでは正確）。`.py`/`.js` への書き込みは制限しません |
 | **同一ファイルの読み書き** | `(Get-Content $f) \| Set-Content $f`、`$c = Get-Content $f; Set-Content $f $c`、`cat f > f`、`::ReadAllText` → `::WriteAllText`——新しい内容は唯一のコピーから作られます。`sed -i` は有界な `s///` のみ許可し、`d` と行全体のパターンは拒否。**元ファイル**を `<name>.bak` / `.tmp` / `.new` に先にコピーする書き方は許可 |
 | **ファイルを空にする** | `Clear-Content $f`、`Set-Content $f ''`、`truncate -s 0 $f`、裸の `> $f`、`cp /dev/null $f`——古い内容の控えが残りません。新しい内容を持つ一括書き込みは対象外 |
 | **書き込み文に折り込まれた読み取り** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)`——1 行で読み・切り詰め・書き戻し |
@@ -124,7 +124,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | `blockDestructiveCommands` | `true` | シェル削除を横取りし `file_trash` へ誘導 |
 | `forbidEmptyRecycleBin` | `true` | ごみ箱の空化・改変を拒否 |
 | `forbidWipe` | `true` | `shred` / `sdelete` / `srm` / `cipher /w` / `format` を拒否 |
-| `blockScriptDeletes` | `true` | スクリプトファイルとインライン文字列内の削除を拒否 |
+| `blockScriptDeletes` | `true` | シェルスクリプトとインライン文字列内の削除を拒否 |
 | `blockTruncatingWrites` | `true` | 互換キー：下の 2 つを個別に書かなければ両方に効く |
 | `blockInPlaceRewrite` | `true` | 同一ファイルを読んで書き戻す書き換えを拒否 |
 | `blockUncheckedSliceWrite` | `true` | 書き込みを伴う未検査の `$idx ± n` スライス端点を拒否 |
@@ -171,7 +171,7 @@ UNC ではありませんが、ブリッジはドライブ種別で判定して�
 
 | 対象外 | 理由 |
 | --- | --- |
-| スクリプトファイル内に既にある削除 | 本体をガードは見ない。書き込みと、見えるインライン形を拒否するまで |
+| スクリプトファイル内に既にある削除 | 本体をガードは見ない。シェルスクリプトの書き込みと、見えるインライン形を拒否するまで |
 | `Add-Type` で書いた任意の C#（`DeleteFileW` など） | テキスト判定の外。ごみ箱専用 API だけは名前で塞ぐ |
 | コマンド名を変数に組み立てて `& $c` | テキストでは評価できない |
 | ツール名リスト外の実行経路（独自名のシェル、第三者プラグイン） | リストは明示的（下記） |
@@ -183,7 +183,8 @@ UNC ではありませんが、ブリッジはドライブ種別で判定して�
 | 書き込み後のサイズ比較・ロールバック | 戻すには書き込み前のバイト列が必要で、結局は対象の列挙問題に戻る。`tools/post-execute` は結果をフィードバックに変えるだけで、切り詰めを巻き戻せない。毎回ツリーをスナップショットするのは O(ワークスペース) で、しかも UNC 上の対象は含まれない |
 | 共有上のものを `Move-Item` / `robocopy /MOV` で移動 | 内容は移動先に残るが、共有側は完全に unlink され、ごみ箱の記録も残らない |
 | **Windows が開けない名前を含むディレクトリ**（末尾が空白またはピリオド。WSL・解凍ツール・同期クライアントが残す） | Win32 はパスに書くとき末尾の文字を切り落とすため、ツリーを走査できない。どの項目がなぜ駄目かは伝える。末尾が空白・ピリオドでなくなるよう改名すれば削除できる |
-| **プロセスが使用中のディレクトリ**（作業ディレクトリに設定されている、または中のファイルが開かれている） | そのプロセスが終了すれば削除できる。使用中であることは伝えるので、原因を探す手がかりにはなるが、代わりに探しには行かない |
+| **プロセスが使用中のディレクトリ**（作業ディレクトリに設定されている、または中のファイルが開かれている） | そのプロセスが終了すれば削除できる。使用中であることは伝えるので、原因を探す手がかりになる |
+| **ポリシーでごみ箱が無効、または項目がボリュームのごみ箱上限を超える** | その削除は実際に内容を消し、ツールには防げません。今回の削除でごみ箱レコードができたかを確認し、無ければ「ごみ箱へ移動」ではなく実際の結果を報告します |
 
 対象のシェルツール名：`pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`、`shell`、
 `terminal_send`、`terminal_write`。判定は文の命令語・呼び出しの形・プログラム位置で行い、行内に語が現れたかどうかでは見ません。
@@ -209,7 +210,7 @@ DSH のインストールが無い環境では失敗ではなく**スキップ**
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | 各バージョンの変更点 |
 | [SECURITY.md](SECURITY.md) | 脅威モデル：サンドボックスではなくポリシー層 |
-| [docs/archive/incidents/](docs/archive/incidents/) | 各規則の根拠となる実測と逐語コマンド（GitHub リポジトリ内） |
+| [docs/archive/incidents/](https://github.com/deepestevan/dsh-delete-guard/tree/main/docs/archive/incidents) | 各規則の根拠となる実測と逐語コマンド |
 | [LICENSE](LICENSE) | MIT |
 
 

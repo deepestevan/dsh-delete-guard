@@ -7,7 +7,7 @@ Recycle Bin instead.
 
 ```
 agent:   Remove-Item -Recurse -Force .\src
-refused: The delete guard blocked this delete. Re-run this as: file_trash with paths = ["…\src"]
+refused: The recycle-bin guard blocked this delete. … Re-run this as:  file_trash with paths = ["…\src"]
 then:    file_trash → moved to the Recycle Bin, "Restore" works
 ```
 
@@ -23,9 +23,8 @@ An agent deletes a file for an ordinary reason: it misremembered a path, mistype
 character, mixed up PowerShell and bash syntax, or did not realise what a Windows path
 referred to. The result can be irreversible — a workspace emptied, a whole disk formatted, a
 document being edited turned blank by a single write-back. That class of accident is what
-this plugin addresses, and its rules are not invented: most come from real deletions, quoted
-verbatim under `docs/archive/incidents/`; the rest come from reproducible shapes found in
-review.
+this plugin addresses: most rules come from real deletions, the rest from reproducible shapes
+found in review.
 
 The goal is not to forbid deletion but to leave a way back from each one: what the Recycle
 Bin can hold goes there; what it cannot — permanent-erase tools, emptying the bin, disk-level
@@ -59,15 +58,16 @@ slice endpoint that feeds a write.
 # from npm
 dsh plugin --profile web add dsh-delete-guard
 # or straight from the repository
-dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.4.5
+dsh plugin --profile web add github:deepestevan/dsh-delete-guard#v2.5.0
 # or from a local tarball (when you have changed the source)
 pnpm pack --pack-destination ./temp/pack     # bump `version` first
-dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.4.5.tgz
-# restart dsh web: lib/*.js is loaded at process start
+dsh plugin --profile web add file:./temp/pack/dsh-delete-guard-2.5.0.tgz
+# then check that `file_trash` appears in the session; if not, restart dsh web
 ```
 
-Update with `remove` then `add`: a lone `add` can answer `Already up to date` and change
-nothing, and `lib/*.js` is only reloaded when the process restarts.
+Update with `remove` then `add`: under the same version a lone `add` can answer
+`Already up to date` and change nothing. `remove` takes the plugin out of the running host
+at once and `add` loads it again, so there is a short window with no guard.
 
 ## What it blocks
 
@@ -93,7 +93,7 @@ terminal_send: "Remove-Item C:\tmp\a.txt"
 | **A command name spelled with backticks** | ``s`delete``, ``Clear-Recy`cleBin``, ``R`emove-I`tem``: in PowerShell a backtick is an escape, so the real name is judged |
 | Emptying the bin | `Clear-RecycleBin` (bare, `&`, child shell, `-EncodedCommand`), `SHEmptyRecycleBin`, driving bin items' shell verbs, deleting `$Recycle.Bin` contents |
 | Locations without a bin | UNC shares, mapped network drives (`S:` → a share), exFAT/FAT32 volumes, where "recycling" is a permanent erase |
-| Deletes inside scripts | shell / Python / Node inline bodies, and writing delete text into `.ps1`/`.sh`/`.bat`, where the shell verb table is exact. Writing `.py` / `.js` is not restricted: the table would be a guess there, and "write it, then run it" is one command away from being out of reach anyway |
+| Deletes inside scripts | shell / Python / Node inline bodies, and writing delete text into `.ps1`/`.sh`/`.bat`, where the shell verb table is exact. Writing `.py` / `.js` is not restricted |
 | **Reading a file and rewriting it in one command** | `(Get-Content $f) \| Set-Content $f`, `$c = Get-Content $f; Set-Content $f $c`, `cat f > f`, `::ReadAllText` → `::WriteAllText` — the new content comes from the only copy. `sed -i` passes only for a bounded `s///` script; `d` and whole-line patterns stay refused. The spelling that copies the **target** to `<name>.bak` / `.tmp` / `.new` first is allowed |
 | **Leaving a file empty** | `Clear-Content $f`, `Set-Content $f ''`, `truncate -s 0 $f`, a bare `> $f`, `cp /dev/null $f` — the old content is not saved anywhere; a one-step write that carries new content is unaffected |
 | **A read folded into the write statement** | `Set-Content $f (Get-Content $f \| Select-Object -First 10)` — reads, truncates and writes back on one line |
@@ -127,7 +127,7 @@ to `false` has to be restated to stay off):
 | `blockDestructiveCommands` | `true` | Intercept shell deletes and redirect to `file_trash` |
 | `forbidEmptyRecycleBin` | `true` | Refuse emptying or modifying the bin |
 | `forbidWipe` | `true` | Refuse `shred` / `sdelete` / `srm` / `cipher /w` / `format` |
-| `blockScriptDeletes` | `true` | Refuse deletes in script files and inline strings |
+| `blockScriptDeletes` | `true` | Refuse deletes in shell scripts and inline strings |
 | `blockTruncatingWrites` | `true` | Compatibility key: sets both rules below, unless they are named |
 | `blockInPlaceRewrite` | `true` | Refuse read-then-rewrite of the same file |
 | `blockUncheckedSliceWrite` | `true` | Refuse an unchecked `$idx ± n` slice endpoint in a command that writes |
@@ -180,7 +180,7 @@ it as a share. To keep the content, copy the item to a local NTFS volume first.
 
 | Not covered | Why |
 | --- | --- |
-| Deletes already inside a script file | The guard never sees the body; it refuses the write and the inline forms it can see |
+| Deletes already inside a script file | The guard never sees the body; it refuses the write of a shell script and the inline forms it can see |
 | Arbitrary C# through `Add-Type` (e.g. `DeleteFileW`) | Out of reach for text matching; only the bin-specific API is named and blocked |
 | A command name assembled into a variable, then `& $c` | Cannot be evaluated textually |
 | Execution channels outside the tool list (custom-named shells, third-party plugins) | The list is explicit — see below |
@@ -192,7 +192,8 @@ it as a share. To keep the content, copy the item to a local NTFS volume first.
 | Judging a truncation by size afterwards | Rolling back needs the old bytes, and `tools/post-execute` can only turn a result into feedback |
 | Moving something off a share (`Move-Item`, `robocopy /MOV`) | The content reaches the destination, but the share copy is unlinked for good and no bin record exists |
 | **A directory holding a name Windows cannot open** (trailing space or dot, usually left by WSL, an extractor or a sync client) | Win32 trims the trailing character when the name goes into a path, so the tree cannot be walked. The tool names the entry and the reason; renaming it so the name no longer ends with a space or dot makes the directory deletable |
-| **A directory a process is using** (its working directory, or an open file inside) | It can be deleted once that process exits. The tool says that is what happened, which is what you need to go and find the process; it does not look for it for you |
+| **A directory a process is using** (its working directory, or an open file inside) | It can be deleted once that process exits. The tool says that is what happened, which is what you need to go and find the process |
+| **A Recycle Bin disabled by policy, or an item larger than the volume's bin quota** | Such a delete really erases the content, and the tool cannot prevent it. It checks whether this call produced a bin record and reports that there was none, instead of reporting a recycle |
 
 Covered shell tools: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `zsh`, `shell`,
 `terminal_send`, `terminal_write`.
@@ -222,7 +223,7 @@ the same number of table rows.
 | --- | --- |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 | [SECURITY.md](SECURITY.md) | Threat model: a policy layer, not a sandbox |
-| [docs/archive/incidents/](docs/archive/incidents/) | Measured evidence behind each rule, with the verbatim commands — in the GitHub repository |
+| [docs/archive/incidents/](https://github.com/deepestevan/dsh-delete-guard/tree/main/docs/archive/incidents) | Measured evidence behind each rule, with the verbatim commands |
 | [LICENSE](LICENSE) | MIT |
 
 

@@ -1,19 +1,15 @@
 # Changelog
 
-All notable changes to this plugin. Dates are the day the tarball was packed on
-this machine (`temp/pack/dsh-delete-guard-<ver>.tgz`), which is the artifact each
-profile actually ran — local time, UTC+8.
+All notable changes to this plugin, newest first. A version's date is the day its package was
+packed, local time (UTC+8).
 
-The detail behind an entry — what was measured, what was rejected, what a trade-off costs
-— sits in the code comments and under `docs/`. Neither ships in the npm package.
+## [2.5.0] — 2026-11-28
 
-## [2.5.0] — 2026-11-26
-
-**A release about *where* a rule looks, not about what it forbids.** The guard now judges a
-construct where it sits — in the statement that deletes, in the loop body that repeats, at
-the path a delete names — instead of over the whole command text. The protections are
-unchanged; the refusals that named the wrong reason are gone. Two content rules became
-separately switchable; the old key still sets both. Nothing needs reconfiguring.
+**A pass over where each rule looks.** The guard now judges a construct where it sits — in the
+statement that deletes, in the loop body that repeats, at the path a delete names — instead of
+over the whole command text. The protections are unchanged; several refusals that named the
+wrong reason are gone. Two content rules became separately switchable, and the old key still
+sets both. Nothing needs reconfiguring.
 
 ### Refusals that were about text, not about the command
 
@@ -27,18 +23,6 @@ separately switchable; the old key still sets both. Nothing needs reconfiguring.
 | a loop, then a temp file written and read back for verification | refused as an in-place rewrite — every file in the command inherited the loop | allowed; the exemption is disabled only inside the loop body that repeats |
 | `Remove-Item -WhatIf x` | denied: a preview was refused | passes — a preview deletes nothing. A command mixing a preview with a real delete is still refused, and the reason says which is which |
 | `Set-Content "$env:TEMP\fix.py" "import os; os.remove(p)"` | refused as a script write | allowed. The shell-script rule stays: a `.ps1`/`.sh`/`.bat` body is shell text and its verb table is exact |
-| the refusal for `Remove-Item $p` said "a variable `$name`" | — | it names the variable (`$p`) |
-
-### What still refuses, and why
-
-- **Inline interpreter bodies** (`python -c`, `node -e`) that call an erase API: that text
-  runs now, and its targets cannot be read.
-- **Shell scripts** written with a delete in the body: the verb table is exact for shell text,
-  and running the file by path is the hole the guard cannot see into.
-- **A preview and a real delete in one command**: one deny covers the whole call, so the
-  rewrite instruction would name the previewed path too.
-- **A slice plus a write**: unchanged — a slice computed in one command and written in the
-  next cannot be told apart from a rewrite of its source.
 
 ### Configuration
 
@@ -48,8 +32,8 @@ separately switchable; the old key still sets both. Nothing needs reconfiguring.
 | `blockUncheckedSliceWrite` | `true` | An unasserted `$idx ± n` slice endpoint in a command that writes |
 | `blockTruncatingWrites` | `true` | Still there: sets both of the above, unless they are named |
 
-Tests 233 → 235. On the same 6,000-command sample refusals fall 70 → 44, and **no command
-that was allowed before is refused now** (21 commands released, 5 change reason).
+Tests 233 → 235. On a 6,000-command sample from one machine, refusals fall 70 → 44 with no
+command that was previously allowed becoming refused.
 
 ## [2.4.5] — 2026-11-26
 
